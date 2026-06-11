@@ -1344,6 +1344,12 @@ name = "soccer-sim-game-engine"
 version = "0.0.1"
 dependencies = [
  "des_engine",
+ "native-tls",
+ "postgres",
+ "postgres-native-tls",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

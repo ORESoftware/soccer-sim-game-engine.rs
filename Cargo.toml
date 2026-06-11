@@ -2,7 +2,7 @@
 name = "soccer-sim-game-engine"
 version = "0.0.1"
 edition = "2021"
-description = "Soccer 2D sim/game domain engine, built on discrete-event-system.rs (des_engine) for LP/IPM/Clarabel optimization and neural / MDP-POMDP learning."
+description = "Soccer 2D sim/game domain engine, built on discrete-event-system.rs (des_engine) for LP/IPM/Clarabel optimization and neural / MDP-POMDP learning. Transport-agnostic: no HTTP server."
 
 [lib]
 name = "soccer_sim_game_engine"
@@ -10,6 +10,14 @@ path = "src/lib.rs"
 
 [dependencies]
 # The generic discrete-event-system engine: LP (simplex/dual/IPM/Clarabel),
-# neural nets, MDP/POMDP, evolution. Materialized adjacently at deploy time the
-# same way dd-des-rs already clones the engine (path dep over a sibling clone).
+# neural nets, MDP/POMDP, evolution, the DES station framework.
 des_engine = { path = "../discrete-event-system.rs" }
+
+# Soccer's own external deps (mirrored from des_engine's versions). Postgres +
+# pgvector for learning persistence / moment-embedding RAG.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+postgres = { version = "0.19", features = ["with-serde_json-1"] }
+native-tls = "0.2"
+postgres-native-tls = "0.5"
