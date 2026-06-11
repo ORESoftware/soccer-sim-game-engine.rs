@@ -1,0 +1,15 @@
+[package]
+name = "soccer-sim-game-engine"
+version = "0.0.1"
+edition = "2021"
+description = "Soccer 2D sim/game domain engine, built on discrete-event-system.rs (des_engine) for LP/IPM/Clarabel optimization and neural / MDP-POMDP learning."
+
+[lib]
+name = "soccer_sim_game_engine"
+path = "src/lib.rs"
+
+[dependencies]
+# The generic discrete-event-system engine: LP (simplex/dual/IPM/Clarabel),
+# neural nets, MDP/POMDP, evolution. Materialized adjacently at deploy time the
+# same way dd-des-rs already clones the engine (path dep over a sibling clone).
+des_engine = { path = "../discrete-event-system.rs" }
