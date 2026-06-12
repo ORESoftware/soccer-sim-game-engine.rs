@@ -16005,6 +16005,11 @@ pub struct MatchConfig {
     pub spacing: SoccerSpacingParams,
     #[serde(default = "default_neural_learning_config")]
     pub neural_learning: SoccerNeuralLearningConfig,
+    /// Decision-time coupling of the trained neural value/actor to the tabular
+    /// MDP/POMDP policy. Off by default (play unchanged); `live_gameplay` turns on an
+    /// Additive + actor-critic blend so the nets integrate with the tabular policy.
+    #[serde(default)]
+    pub neural_blend: SoccerNeuralBlendConfig,
     #[serde(default = "default_adversarial_embedding_exploitation_enabled")]
     pub adversarial_embedding_exploitation_enabled: bool,
     #[serde(default = "default_adversarial_moment_memory_limit")]
@@ -16041,6 +16046,7 @@ impl Default for MatchConfig {
             tactical_learning: SoccerTacticalLearningWeights::default(),
             spacing: SoccerSpacingParams::default(),
             neural_learning: SoccerNeuralLearningConfig::default(),
+            neural_blend: SoccerNeuralBlendConfig::default(),
             adversarial_embedding_exploitation_enabled: true,
             adversarial_embedding_memory_limit: DEFAULT_ADVERSARIAL_MOMENT_MEMORY_LIMIT,
             max_human_players: 4,
@@ -16086,6 +16092,10 @@ impl MatchConfig {
             // footprint is bounded, so the live server stays stable. Live Q + neural learning
             // still run at realtime rate.
             self_play_learning_enabled: false,
+            // Full synergy in real games: the neural value/actor TRAIN (threaded) AND feed
+            // back into selection (Additive blend + actor-critic) so the nets integrate with
+            // the tabular MDP/POMDP policy, and the trained critic couples back to the LP
+            // (simplex/IPM) formation solver.
             neural_learning: SoccerNeuralLearningConfig {
                 enabled: true,
                 backend: SoccerNeuralLearningBackend::Threaded,
@@ -16094,6 +16104,11 @@ impl MatchConfig {
                 // formation LP, so the LP and the neural MDP approximation reinforce each other.
                 lp_coupling_enabled: true,
                 ..SoccerNeuralLearningConfig::default()
+            },
+            neural_blend: SoccerNeuralBlendConfig {
+                mode: SoccerNeuralBlendMode::Additive,
+                actor_critic: true,
+                ..SoccerNeuralBlendConfig::default()
             },
             // OFF: the adversarial moment-embedding→LP coupling queries the (now 12×-bigger)
             // value net heavily in the pre-field phase (~27ms/tick → uneven frame delivery /
@@ -44481,7 +44496,7 @@ impl SoccerMatch {
             } else {
                 None
             },
-            neural_blend: SoccerNeuralBlendConfig::default(),
+            neural_blend: config.neural_blend,
             neural_formation_intent_cache: SoccerNeuralFormationIntent::default(),
             policy_head: None,
             world_model: None,
@@ -90400,6 +90415,12 @@ mod tests {
             SoccerNeuralLearningBackend::Threaded
         );
         assert!(config.adversarial_embedding_exploitation_enabled);
+        // Synergy must be ACTIVE in real games, not just trained-and-ignored: the
+        // neural value/actor blend into MDP/POMDP action selection, and the trained
+        // critic couples back to the LP formation solver.
+        assert_eq!(config.neural_blend.mode, SoccerNeuralBlendMode::Additive);
+        assert!(config.neural_blend.actor_critic);
+        assert!(config.neural_learning.lp_coupling_enabled);
     }
 
     #[test]
@@ -97555,6 +97576,71 @@ tick,player_id,team,role,x,y,ball_x,ball_y,tracking_confidence,ball_confidence,p
                 "the far-side wing-back should slide across toward a wide ball \
                  (home_x={home_x:.1}, shape_x={shape_x:.1})"
             );
+        }
+    }
+
+    #[test]
+    fn positioning_stays_finite_and_on_pitch_under_degenerate_inputs() {
+        // Hardening: corrupted geometry (NaN/Inf/huge positions, a NaN ball) must
+        // never yield a non-finite or off-pitch move target, and must never panic.
+        let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+        let w = sim.config.field_width_yards;
+        let l = sim.config.field_length_yards;
+        let on_pitch = |p: Vec2| {
+            p.x.is_finite()
+                && p.y.is_finite()
+                && p.x >= -0.01
+                && p.x <= w + 0.01
+                && p.y >= -0.01
+                && p.y <= l + 0.01
+        };
+        sim.players[2].position = Vec2::new(f64::NAN, f64::NAN);
+        sim.players[3].position = Vec2::new(f64::INFINITY, f64::NEG_INFINITY);
+        sim.players[5].position = Vec2::new(1.0e9, -1.0e9);
+        sim.players[13].position = Vec2::new(f64::NAN, 50.0);
+        sim.players[17].position = Vec2::new(40.0, f64::NAN);
+        sim.ball.position = Vec2::new(f64::NAN, f64::NAN);
+        sim.ball.holder = Some(17);
+        sim.ball.last_touch_team = Some(Team::Away);
+        let snapshot = WorldSnapshot::from_match(&sim);
+        for id in 0..22 {
+            let home = sim.players[id].home_position;
+            for target in [
+                snapshot.defensive_shape_for(id, home),
+                snapshot.mark_or_zone_for(id, home),
+                snapshot.defensive_assignment_for(id, home, false),
+                snapshot.defensive_assignment_for(id, home, true),
+            ] {
+                assert!(
+                    on_pitch(target),
+                    "id={id} produced an off-pitch/non-finite target {target:?}"
+                );
+            }
+        }
+
+        // Direct helper hardening: coincident + NaN inputs stay finite.
+        let degenerate = teammate_spacing_suggested_point(
+            2,
+            Vec2::new(f64::NAN, 1.0),
+            Vec2::zero(),
+            3,
+            Vec2::new(f64::NAN, 1.0),
+            3.0,
+            f64::NAN,
+        );
+        assert!(degenerate.x.is_finite() && degenerate.y.is_finite());
+        let coincident =
+            teammate_spacing_suggested_point(2, Vec2::new(40.0, 60.0), Vec2::new(40.0, 60.0), 3, Vec2::new(40.0, 60.0), 3.0, 0.0);
+        assert!(coincident.x.is_finite() && coincident.y.is_finite());
+        assert!(vertical_lane_clamped_x_for_role(PlayerRole::Defender, 30.0, f64::NAN, w, false).is_finite());
+        assert!(vertical_lane_clamped_x_for_role(PlayerRole::Forward, f64::NAN, f64::NAN, w, true).is_finite());
+
+        // The per-pair spacing clocks must not panic on corrupted positions, and any
+        // notice they emit must carry a finite, in-range payload.
+        sim.update_teammate_spacing_proximity();
+        for notice in &sim.teammate_spacing_notices {
+            assert!(notice.suggested_point.x.is_finite() && notice.suggested_point.y.is_finite());
+            assert!(notice.severity.is_finite() && (0.0..=1.0).contains(&notice.severity));
         }
     }
 
