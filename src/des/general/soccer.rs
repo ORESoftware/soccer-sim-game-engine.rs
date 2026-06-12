@@ -118449,9 +118449,9 @@ tick,player_id,team,role,x,y,ball_x,ball_y,tracking_confidence,ball_confidence,p
         assert!(html.contains("drawGoalPosts(r)"));
         assert!(html.contains("goalWidthYards"));
         assert!(html.contains("ctx.arc(post.x, post.y, postRadius"));
-        assert!(html.contains("for (const o of f.officials) drawOfficial(o, r)"));
-        assert!(html.contains("for (const p of f.players) drawPlayer(p, r)"));
-        assert!(html.contains("drawBall(f.ball, r)"));
+        assert!(html.contains("for (const o of frame.officials || []) drawOfficial(o, r)"));
+        assert!(html.contains("for (const p of frame.players || []) drawPlayer(p, r)"));
+        assert!(html.contains("drawBall(frame.ball, r)"));
         assert!(html.contains("function drawPlayer(p, r)"));
         assert!(html.contains("function drawOfficial(o, r)"));
         assert!(html.contains("function drawBall(ball, r)"));
