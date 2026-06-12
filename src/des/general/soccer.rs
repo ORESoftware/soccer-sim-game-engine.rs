@@ -51104,6 +51104,38 @@ impl SoccerMatch {
         }
     }
 
+    /// Place a set of dead-ball participants into a set of slots with LANE AFFINITY:
+    /// the caller picks *which* players take part (role ordering) and supplies the
+    /// slots; here the i-th participant by home-x is matched to the i-th slot by x, so
+    /// left-home players (e.g. the left wing-back) always take left-side slots and
+    /// right-home players take right-side slots. Without this, the role-sorted player
+    /// list was zipped against an x-unsorted slot array and wing-backs could be planted
+    /// on the wrong side — appearing to "switch sides" on corners / goal kicks.
+    fn assign_dead_ball_slots_lane_stable(&mut self, player_ids: &[usize], slots: &[Vec2]) {
+        let n = player_ids.len().min(slots.len());
+        if n == 0 {
+            return;
+        }
+        let mut players: Vec<(usize, f64)> = player_ids[..n]
+            .iter()
+            .map(|&id| {
+                let home_x = self
+                    .players
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.home_position.x)
+                    .unwrap_or(0.0);
+                (id, home_x)
+            })
+            .collect();
+        players.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut ordered_slots: Vec<Vec2> = slots[..n].to_vec();
+        ordered_slots.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+        for ((id, _), slot) in players.into_iter().zip(ordered_slots) {
+            self.set_dead_ball_player_position(id, slot);
+        }
+    }
+
     fn set_play_role_ids(
         &self,
         team: Team,
@@ -51632,13 +51664,8 @@ impl SoccerMatch {
             Vec2::new(width * 0.28, goal_y - dir * 22.0),
             Vec2::new(width * 0.72, goal_y - dir * 24.0),
         ];
-        for (player_id, slot) in self
-            .restart_team_ids(attacking_team, false, taker)
-            .into_iter()
-            .zip(attacking_slots)
-        {
-            self.set_dead_ball_player_position(player_id, slot);
-        }
+        let attacking_ids = self.restart_team_ids(attacking_team, false, taker);
+        self.assign_dead_ball_slots_lane_stable(&attacking_ids, &attacking_slots);
 
         let defending_team = attacking_team.other();
         if let Some(keeper_id) = self.goalkeeper_for(defending_team) {
@@ -51653,13 +51680,8 @@ impl SoccerMatch {
             Vec2::new(width * 0.22, goal_y - dir * 17.0),
             Vec2::new(width * 0.78, goal_y - dir * 18.0),
         ];
-        for (player_id, slot) in self
-            .restart_team_ids(defending_team, false, None)
-            .into_iter()
-            .zip(defending_slots)
-        {
-            self.set_dead_ball_player_position(player_id, slot);
-        }
+        let defending_ids = self.restart_team_ids(defending_team, false, None);
+        self.assign_dead_ball_slots_lane_stable(&defending_ids, &defending_slots);
 
         if let Some(taker_id) = taker {
             self.set_dead_ball_player_position(taker_id, spot);
@@ -51679,26 +51701,24 @@ impl SoccerMatch {
             Vec2::new(width * 0.34, own_goal_y + dir * 36.0),
             Vec2::new(width * 0.66, own_goal_y + dir * 36.0),
         ];
-        for (player_id, slot) in self
+        // Reverse role order so the deepest players (defenders, then mids) take the
+        // goal-kick outlet slots; lane-stable assignment then keeps each on his side.
+        let outlet_ids: Vec<usize> = self
             .restart_team_ids(team, false, taker)
             .into_iter()
             .rev()
-            .zip(outlet_slots)
-        {
-            self.set_dead_ball_player_position(player_id, slot);
-        }
-        for (player_id, slot) in self
-            .restart_team_ids(team.other(), false, None)
-            .into_iter()
-            .zip([
+            .collect();
+        self.assign_dead_ball_slots_lane_stable(&outlet_ids, &outlet_slots);
+        let press_ids = self.restart_team_ids(team.other(), false, None);
+        self.assign_dead_ball_slots_lane_stable(
+            &press_ids,
+            &[
                 Vec2::new(width * 0.28, own_goal_y + dir * 45.0),
                 Vec2::new(width * 0.50, own_goal_y + dir * 50.0),
                 Vec2::new(width * 0.72, own_goal_y + dir * 45.0),
                 Vec2::new(width * 0.38, own_goal_y + dir * 58.0),
-            ])
-        {
-            self.set_dead_ball_player_position(player_id, slot);
-        }
+            ],
+        );
         if let Some(taker_id) = taker.or_else(|| self.goalkeeper_for(team)) {
             self.set_dead_ball_player_position(taker_id, spot);
         }
@@ -82922,6 +82942,46 @@ mod tests {
                 ..
             } if target_player == call.release_player
         ));
+    }
+
+    #[test]
+    fn dead_ball_slot_assignment_keeps_players_in_their_lane() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 7,
+            ..Default::default()
+        });
+        let home_ids: Vec<usize> = sim
+            .players
+            .iter()
+            .filter(|p| p.team == Team::Home && p.role != PlayerRole::Goalkeeper)
+            .map(|p| p.id)
+            .take(3)
+            .collect();
+        let (left, center, right) = (home_ids[0], home_ids[1], home_ids[2]);
+        sim.players[left].home_position = Vec2::new(10.0, 30.0);
+        sim.players[center].home_position = Vec2::new(40.0, 30.0);
+        sim.players[right].home_position = Vec2::new(70.0, 30.0);
+
+        // Slots supplied in scrambled (non-x-sorted) order, exactly like the corner /
+        // goal-kick slot arrays that used to switch wing-backs' sides.
+        let slots = [
+            Vec2::new(68.0, 100.0), // right slot listed first
+            Vec2::new(12.0, 100.0), // left slot
+            Vec2::new(40.0, 100.0), // centre slot
+        ];
+        sim.assign_dead_ball_slots_lane_stable(&[left, center, right], &slots);
+
+        let x_of = |id: usize| sim.players.iter().find(|p| p.id == id).unwrap().position.x;
+        let (lx, cx, rx) = (x_of(left), x_of(center), x_of(right));
+        assert!(
+            lx < cx && cx < rx,
+            "home-x order must be preserved into placed-x order (lane affinity): l={lx} c={cx} r={rx}"
+        );
+        assert!(
+            lx < 20.0 && rx > 60.0,
+            "left-home player takes the left slot and right-home player the right slot: l={lx} r={rx}"
+        );
     }
 
     #[test]
