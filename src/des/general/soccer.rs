@@ -1896,7 +1896,18 @@ fn vertical_lane_clamped_x_for_role(
     let (min_lane, max_lane) = role_vertical_lane_range(role, home_x, field_width, in_possession);
     let (left, _) = vertical_lane_bounds(min_lane, field_width);
     let (_, right) = vertical_lane_bounds(max_lane, field_width);
-    target_x.clamp(left + 0.05, (right - 0.05).max(left + 0.05))
+    let lo = left + 0.05;
+    let hi = (right - 0.05).max(lo);
+    // Self-sanitising: a non-finite target_x would otherwise propagate (f64::clamp
+    // returns NaN for a NaN input). Fall back to the player's own lane.
+    let x = if target_x.is_finite() {
+        target_x
+    } else if home_x.is_finite() {
+        home_x
+    } else {
+        lo
+    };
+    x.clamp(lo, hi)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -24220,11 +24231,20 @@ impl WorldSnapshot {
                     } else {
                         0.0
                     };
+                // Prefer shorter (<20 yd) passes that keep possession over longer balls,
+                // and prefer them MORE when the holder is calm (low pressure) and can
+                // pick a controlled short option rather than forcing it forward.
+                let short_pass_preference = if backward {
+                    0.0
+                } else {
+                    short_pass_preference_bonus(dist, no_pressure)
+                };
                 let score = forward * forward_weight + self.space_score_at(position, me.team)
                     - dist * 0.010
                     - support_fit * 0.020
                     + confidence * 0.65
                     + role_bonus
+                    + short_pass_preference
                     + pass_quality.expected_completion * 1.95
                     + pass_quality.receiver_openness * 0.62
                     + pass_quality.stride_fit * 1.18
@@ -25499,6 +25519,19 @@ impl WorldSnapshot {
         } else {
             self.field_width - WIDE_OUTLET_TOUCHLINE_BUFFER_YARDS
         };
+        // When the ball holder has time (low pressure) and this supporting player is
+        // within ~20 yds, the holder "directs" them into wide open space — pull harder
+        // toward the flank than when the holder is rushed.
+        let holder_calm_wide_boost = self
+            .ball
+            .holder
+            .filter(|holder| *holder != player_id)
+            .and_then(|holder| self.players.iter().find(|p| p.id == holder))
+            .map(|holder| self.player_snapshot_position(holder))
+            .filter(|holder_pos| {
+                current.distance(*holder_pos) <= 20.0 && self.no_pressure_at(me.team, *holder_pos)
+            })
+            .map_or(0.0, |_| 1.6);
         let lateral = (touchline_x - current.x).abs();
         let min_forward =
             (lateral * SUPPORT_MIN_UPFIELD_PER_LATERAL_YARD).max(WIDE_OUTLET_MIN_FORWARD_YARDS);
@@ -25542,7 +25575,7 @@ impl WorldSnapshot {
                 let line_penalty = self.role_line_penalty_for_player_target(me, candidate, relief);
                 let score = self.space_score_at(candidate, me.team)
                     + openness * 3.0
-                    + width * 2.0
+                    + width * (2.0 + holder_calm_wide_boost)
                     + forward.clamp(0.0, 18.0) * 0.08
                     + lane_bonus
                     - candidate.distance(home) * 0.025
@@ -28665,6 +28698,14 @@ fn intercepted_pass_passer_penalty(pass: &PendingPass, field_length: f64) -> f64
     let own_half_cost = if own_half { 1.15 } else { 0.35 };
     let aerial_cost = if pass.flight.is_aerial() { 0.85 } else { 0.0 };
     (3.0 + openness_cost + direction_cost + own_half_cost + aerial_cost).clamp(4.0, 13.0)
+}
+
+/// Preference bonus for shorter (<20 yd) passes that keep possession. Shorter is
+/// better, and the preference is stronger when the holder is calm (low pressure) and
+/// can pick a controlled short option rather than forcing it long. 0 for >=20 yd.
+fn short_pass_preference_bonus(distance_yards: f64, holder_low_pressure: bool) -> f64 {
+    let shortness = ((20.0 - distance_yards) / 20.0).clamp(0.0, 1.0);
+    shortness * if holder_low_pressure { 1.9 } else { 0.9 }
 }
 
 /// Penalty for a "pass to nobody" — a targeted pass that reached no teammate and went
@@ -71700,6 +71741,27 @@ mod tests {
             closed_penalty < open_penalty - 1.2,
             "closed/lateral interception should blame passer more: open={open_penalty} closed={closed_penalty}"
         );
+    }
+
+    #[test]
+    fn short_pass_preference_favours_sub_20_yard_balls_more_when_calm() {
+        // Shorter passes earn a bigger preference, and the preference is amplified
+        // when the holder is calm (low pressure) so it picks the controlled short ball.
+        assert!(
+            short_pass_preference_bonus(8.0, true) > short_pass_preference_bonus(15.0, true),
+            "shorter passes are preferred more"
+        );
+        assert!(
+            short_pass_preference_bonus(8.0, true) > short_pass_preference_bonus(8.0, false),
+            "low pressure amplifies the short-pass preference"
+        );
+        assert_eq!(
+            short_pass_preference_bonus(20.0, true),
+            0.0,
+            "no short-pass bonus at or beyond 20 yds"
+        );
+        assert_eq!(short_pass_preference_bonus(30.0, true), 0.0);
+        assert!(short_pass_preference_bonus(0.0, true) > 1.5);
     }
 
     #[test]
