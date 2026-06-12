@@ -2293,8 +2293,8 @@ impl TeamAttackStrategy {
             TeamAttackStrategy::CounterTransitionVertical => s(Center, Center, 2, 0.85),
             TeamAttackStrategy::HalfSpaceComboLeft => s(Left, Center, 3, 0.52),
             TeamAttackStrategy::HalfSpaceComboRight => s(Right, Center, 3, 0.52),
-            // Very deep, lowest directness: the whole point is an inviting backward ball.
-            TeamAttackStrategy::PlayBackwardsToGoad => s(Center, Center, 8, 0.06),
+            // Very patient, lowest directness: the whole point is an inviting backward ball.
+            TeamAttackStrategy::PlayBackwardsToGoad => s(Center, Center, 7, 0.06),
         }
     }
 }
