@@ -24053,6 +24053,43 @@ impl WorldSnapshot {
             })
     }
 
+    /// A forward pass played from the final third into nobody: no teammate within 10
+    /// yards of the ball's path AND no teammate ahead of the passer when it is played.
+    /// These break the attack and "should not happen", so they are filtered out of the
+    /// pass options the agent (and learned policy) can choose.
+    fn final_third_forward_pass_to_nobody(
+        &self,
+        team: Team,
+        passer_id: usize,
+        origin: Vec2,
+        target_point: Vec2,
+    ) -> bool {
+        let yards_to_goal = (team.goal_y(self.field_length) - origin.y).abs();
+        if yards_to_goal > self.field_length / 3.0 {
+            return false;
+        }
+        let forward = (target_point.y - origin.y) * team.attack_dir();
+        if forward <= 2.0 {
+            return false;
+        }
+        let teammate_near_trajectory = self.players.iter().any(|p| {
+            p.team == team
+                && p.id != passer_id
+                && distance_to_segment(self.player_snapshot_position(p), origin, target_point)
+                    <= 10.0
+        });
+        if teammate_near_trajectory {
+            return false;
+        }
+        let teammate_ahead = self.players.iter().any(|p| {
+            p.team == team
+                && p.id != passer_id
+                && p.role != PlayerRole::Goalkeeper
+                && (self.player_snapshot_position(p).y - origin.y) * team.attack_dir() > 1.0
+        });
+        !teammate_ahead
+    }
+
     fn ranked_pass_targets_filtered(
         &self,
         player_id: usize,
@@ -24110,7 +24147,13 @@ impl WorldSnapshot {
                 }
                 ((!visible_only || self.player_can_see_player(me.id, p.id))
                     && self.clear_line(me_position, anticipated_position, me.team.other(), 2.5)
-                    && self.pending_offside_for_pass(me.id, p.id).is_none())
+                    && self.pending_offside_for_pass(me.id, p.id).is_none()
+                    && !self.final_third_forward_pass_to_nobody(
+                        me.team,
+                        me.id,
+                        me_position,
+                        anticipated_position,
+                    ))
                 .then_some((p, position, anticipated_position))
             })
             .map(|p| {
@@ -24267,7 +24310,13 @@ impl WorldSnapshot {
                     return None;
                 }
                 ((!visible_only || self.player_can_see_player(me.id, p.id))
-                    && self.pending_offside_for_pass(me.id, p.id).is_none())
+                    && self.pending_offside_for_pass(me.id, p.id).is_none()
+                    && !self.final_third_forward_pass_to_nobody(
+                        me.team,
+                        me.id,
+                        me_position,
+                        pass_point,
+                    ))
                 .then_some((p, position, pass_point))
             })
             .map(|(p, position, pass_point)| {
@@ -28616,6 +28665,33 @@ fn intercepted_pass_passer_penalty(pass: &PendingPass, field_length: f64) -> f64
     let own_half_cost = if own_half { 1.15 } else { 0.35 };
     let aerial_cost = if pass.flight.is_aerial() { 0.85 } else { 0.0 };
     (3.0 + openness_cost + direction_cost + own_half_cost + aerial_cost).clamp(4.0, 13.0)
+}
+
+/// Penalty for a "pass to nobody" — a targeted pass that reached no teammate and went
+/// loose. Forward balls into nobody are the worst, and in the final third they are
+/// exceptionally bad (a broken attack), so the MDP/POMDP + neural nets learn to stop
+/// selecting them. `opponent_recovered` adds bite when the other team gathers it.
+fn pass_to_nobody_passer_penalty(
+    pass: &PendingPass,
+    field_length: f64,
+    opponent_recovered: bool,
+) -> f64 {
+    let direction = pass_direction_bucket(pass.team, pass.origin, pass.intended_target);
+    let yards_to_goal = (pass.team.goal_y(field_length) - pass.origin.y).abs();
+    let final_third = yards_to_goal <= field_length / 3.0;
+    let openness_cost = (1.0 - pass.receiver_openness.clamp(0.0, 1.0)) * 3.5;
+    let direction_cost = match direction {
+        PassDirectionBucket::Forward => 2.4,
+        PassDirectionBucket::Lateral => 1.2,
+        PassDirectionBucket::Backward => 0.8,
+    };
+    let opponent_cost = if opponent_recovered { 1.4 } else { 0.0 };
+    let final_third_multiplier = if final_third && direction == PassDirectionBucket::Forward {
+        1.9
+    } else {
+        1.0
+    };
+    ((2.5 + openness_cost + direction_cost + opponent_cost) * final_third_multiplier).clamp(2.5, 16.0)
 }
 
 fn quick_receiver_dispossession_passer_penalty(
@@ -50670,6 +50746,20 @@ impl SoccerMatch {
                         self.stat_interception(team);
                     }
                     BallPossessionResult::LooseBallRecovery(team) => {
+                        // A targeted pass that went loose reached nobody — penalise the
+                        // passer (an untargeted long ball / clearance is judged by its
+                        // own outcome, not here).
+                        if untargeted_long_ball.is_none() {
+                            if let Some(pass) = pending_pass_for_reward.as_ref() {
+                                let opponent_recovered = holder_team != pass.team;
+                                let penalty = pass_to_nobody_passer_penalty(
+                                    pass,
+                                    self.config.field_length_yards,
+                                    opponent_recovered,
+                                );
+                                self.record_reward_event(pass.from, -penalty);
+                            }
+                        }
                         self.record_untargeted_long_ball_outcome(
                             untargeted_long_ball,
                             holder,
@@ -71609,6 +71699,88 @@ mod tests {
         assert!(
             closed_penalty < open_penalty - 1.2,
             "closed/lateral interception should blame passer more: open={open_penalty} closed={closed_penalty}"
+        );
+    }
+
+    #[test]
+    fn pass_to_nobody_penalty_is_worst_for_forward_balls_in_the_final_third() {
+        let field_length = DEFAULT_FIELD_LENGTH_YARDS;
+        // Forward ball played from the final third into nobody (low openness).
+        let mut final_third_forward =
+            test_pending_pass(Team::Home, 6, 9, Vec2::new(40.0, 92.0), Vec2::new(40.0, 108.0));
+        final_third_forward.receiver_openness = 0.10;
+        // The same idea but lateral and in the team's own half.
+        let mut own_half_lateral =
+            test_pending_pass(Team::Home, 6, 9, Vec2::new(40.0, 30.0), Vec2::new(52.0, 30.4));
+        own_half_lateral.receiver_openness = 0.10;
+
+        let ft = pass_to_nobody_passer_penalty(&final_third_forward, field_length, true);
+        let oh = pass_to_nobody_passer_penalty(&own_half_lateral, field_length, false);
+        assert!(
+            ft > oh + 3.0,
+            "a final-third forward pass to nobody must be punished far harder: ft={ft} oh={oh}"
+        );
+        assert!(
+            ft >= 12.0,
+            "a final-third forward pass to nobody should be exceptionally penalised: {ft}"
+        );
+    }
+
+    #[test]
+    fn final_third_forward_pass_to_nobody_flags_unsupported_forward_balls() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 11,
+            ..Default::default()
+        });
+        let team = Team::Home;
+        let passer = 8;
+        let origin = Vec2::new(40.0, 92.0);
+        let target = Vec2::new(40.0, 110.0);
+        // Sweep every Home teammate far behind and wide of the ball's path.
+        for p in sim
+            .players
+            .iter_mut()
+            .filter(|p| p.team == team && p.id != passer)
+        {
+            p.position = Vec2::new(8.0, 20.0);
+            p.home_position = p.position;
+        }
+        let mate = sim
+            .players
+            .iter()
+            .find(|p| p.team == team && p.id != passer && p.role != PlayerRole::Goalkeeper)
+            .map(|p| p.id)
+            .expect("a home outfield teammate");
+
+        let snap = WorldSnapshot::from_match(&sim);
+        assert!(
+            snap.final_third_forward_pass_to_nobody(team, passer, origin, target),
+            "a forward ball in the final third with nobody near the path or ahead is to nobody"
+        );
+
+        // A teammate ahead of the passer makes the same ball supported.
+        sim.players[mate].position = Vec2::new(55.0, 102.0);
+        let snap = WorldSnapshot::from_match(&sim);
+        assert!(
+            !snap.final_third_forward_pass_to_nobody(team, passer, origin, target),
+            "a teammate ahead supports the forward ball"
+        );
+
+        // A teammate within 10 yds of the path (even if level) can run onto it.
+        sim.players[mate].position = Vec2::new(45.0, 92.0);
+        let snap = WorldSnapshot::from_match(&sim);
+        assert!(
+            !snap.final_third_forward_pass_to_nobody(team, passer, origin, target),
+            "a teammate close to the ball's path can reach it"
+        );
+
+        // Outside the final third the guard does not apply.
+        sim.players[mate].position = Vec2::new(8.0, 20.0);
+        let snap = WorldSnapshot::from_match(&sim);
+        assert!(
+            !snap.final_third_forward_pass_to_nobody(team, passer, Vec2::new(40.0, 30.0), Vec2::new(40.0, 50.0)),
+            "the guard only fires in the final third"
         );
     }
 
