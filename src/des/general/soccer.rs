@@ -233,6 +233,16 @@ const SPECULATIVE_LONG_SHOT_MAX_YARDS: f64 = 45.0;
 const SPECULATIVE_LONG_SHOT_MAX_BLOCK_PROBABILITY: f64 = 0.46;
 const SPECULATIVE_LONG_SHOT_MIN_ON_FRAME_PROBABILITY: f64 = 0.10;
 const SPECULATIVE_LONG_SHOT_SKILL_GATE: f64 = 0.68;
+// Long-shot distance discipline. ~25 yds is a fine range; beyond ~26 yds a shot is
+// discouraged and only opens up if the keeper is out of position; beyond ~33 yds it
+// is off entirely unless the keeper is *totally* out of position. "Out of position"
+// is the distance-agnostic `opposing_goalkeeper_out_of_position` signal (how far the
+// keeper has strayed off his line / angle), NOT `shot_beat_goalkeeper_probability`
+// (which is dominated by range and so would block every long shot indiscriminately).
+const LONG_SHOT_DISCOURAGED_YARDS: f64 = 26.0;
+const LONG_SHOT_KEEPER_DEPENDENT_YARDS: f64 = 33.0;
+const LONG_SHOT_GK_OUT_OF_POSITION: f64 = 0.45;
+const LONG_SHOT_GK_TOTALLY_OUT: f64 = 0.80;
 const KILLER_PASS_MAX_YARDS_TO_GOAL: f64 = 52.0;
 const KILLER_PASS_MIN_FORWARD_YARDS: f64 = 4.0;
 const KILLER_PASS_MIN_RECEIVER_GOAL_GAIN_YARDS: f64 = 5.0;
@@ -3168,6 +3178,13 @@ pub struct SoccerPomdpObservation {
     pub opposing_goalkeeper_distance: f64,
     #[serde(default)]
     pub opposing_goalkeeper_angle_degrees: f64,
+    /// How far the opposing keeper is out of position, 0.0 (set on his line and on
+    /// the shot angle) to 1.0 (totally out — rushed well off his line and/or caught
+    /// on the wrong side). Distance-agnostic, unlike `shot_beat_goalkeeper_probability`
+    /// (which is dominated by range), so it can gate "only shoot from distance if the
+    /// keeper is out of position" and let the MDP/POMDP + neural nets recognise it.
+    #[serde(default)]
+    pub opposing_goalkeeper_out_of_position: f64,
     #[serde(default)]
     pub forward_dribble_space_yards: f64,
     #[serde(default)]
@@ -22838,6 +22855,7 @@ impl WorldSnapshot {
                 opponent_goal_angle_degrees: 0.0,
                 opposing_goalkeeper_distance: 0.0,
                 opposing_goalkeeper_angle_degrees: 0.0,
+                opposing_goalkeeper_out_of_position: 0.0,
                 forward_dribble_space_yards: 0.0,
                 real_pressure: 0.0,
                 perceived_pressure: 0.0,
@@ -23275,6 +23293,11 @@ impl WorldSnapshot {
         } else {
             None
         };
+        let opposing_goalkeeper_out_of_position = if has_ball {
+            opposing_goalkeeper_out_of_position_for_snapshot(self, me, me_position)
+        } else {
+            0.0
+        };
         let incoming = me.incoming_ball.as_ref().filter(|context| {
             self.tick.saturating_sub(context.received_tick) <= FIRST_TOUCH_WINDOW_TICKS
         });
@@ -23649,6 +23672,7 @@ impl WorldSnapshot {
                     angle_between_vectors_degrees(goal - me_position, position - me_position)
                 })
                 .unwrap_or(0.0),
+            opposing_goalkeeper_out_of_position,
             forward_dribble_space_yards,
             real_pressure,
             perceived_pressure,
@@ -30374,11 +30398,16 @@ fn dense_soccer_transition_reward(
             own_goal_relief,
         );
         reward += (before_obs.yards_to_goal - after_obs.yards_to_goal).clamp(-8.0, 8.0) * 0.07;
-        // Discourage low-percentage shots from outside ~30 yds: the value is in
-        // working the ball forward, not blazing away from range. Penalty ramps
-        // with distance beyond the shooting window.
-        if action == "shoot" && before_obs.yards_to_goal > STRIKER_SHOT_WINDOW_YARDS {
-            reward -= ((before_obs.yards_to_goal - STRIKER_SHOT_WINDOW_YARDS) / 10.0).min(3.0) * 2.0;
+        // Discourage low-percentage shots from range: the value is in working the
+        // ball forward, not blazing away. Penalty starts just past the ~25-yard
+        // comfortable window and escalates with distance (30 yds is a bad idea, 40
+        // is off), but it is relieved when the keeper is genuinely beatable / out of
+        // position — so the MDP/POMDP learns to take the long shot only then.
+        if action == "shoot" && before_obs.yards_to_goal > LONG_SHOT_DISCOURAGED_YARDS {
+            let over = before_obs.yards_to_goal - LONG_SHOT_DISCOURAGED_YARDS;
+            let keeper_relief = before_obs.opposing_goalkeeper_out_of_position.clamp(0.0, 1.0);
+            let distance_penalty = (over / 7.0).min(3.0) * 2.4;
+            reward -= distance_penalty * (1.0 - keeper_relief * 0.85);
         }
         reward += goalmouth_dribble_learning_reward(
             player, action, before_obs, &after_obs, before, after, before_pos, after_pos,
@@ -63412,6 +63441,16 @@ fn speculative_long_shot_is_qualified(
     if !(TEAMMATE_MUST_SHOOT_YARDS..=SPECULATIVE_LONG_SHOT_MAX_YARDS).contains(&distance) {
         return false;
     }
+    // Distance discipline: 25 yds is fine; ~30 yds is only on if the keeper is out of
+    // position; ~33+ yds is only on if the keeper is totally out of position.
+    let keeper_out = observation.opposing_goalkeeper_out_of_position.clamp(0.0, 1.0);
+    if distance > LONG_SHOT_KEEPER_DEPENDENT_YARDS {
+        if keeper_out < LONG_SHOT_GK_TOTALLY_OUT {
+            return false;
+        }
+    } else if distance > LONG_SHOT_DISCOURAGED_YARDS && keeper_out < LONG_SHOT_GK_OUT_OF_POSITION {
+        return false;
+    }
     if observation.shot_block_probability.clamp(0.0, 1.0)
         > SPECULATIVE_LONG_SHOT_MAX_BLOCK_PROBABILITY
     {
@@ -66162,6 +66201,37 @@ fn goalkeeper_catch_probability_after_save(
         - short_medium_fit * near_keeper_fit * 0.28
         - sightline_screen_probability.clamp(0.0, 1.0) * 0.16)
         .clamp(0.08, 0.96)
+}
+
+/// How far the opposing keeper is out of position for a shot from `player_position`,
+/// 0.0 (set on his line, on the angle) to 1.0 (totally out). Distance-agnostic on
+/// purpose so it can gate long shots ("only from range if the keeper is out") without
+/// being swamped by the range-dominated save baseline.
+fn opposing_goalkeeper_out_of_position_for_snapshot(
+    snapshot: &WorldSnapshot,
+    player: &PlayerSnapshot,
+    player_position: Vec2,
+) -> f64 {
+    let Some(keeper_id) = snapshot.goalkeeper_for(player.team.other()) else {
+        return 0.0;
+    };
+    let Some(keeper) = snapshot.players.iter().find(|p| p.id == keeper_id) else {
+        return 0.0;
+    };
+    let keeper_position = snapshot
+        .player_position(keeper_id)
+        .unwrap_or(keeper.position);
+    let goal_y = player.team.goal_y(snapshot.field_length);
+    let goal_center_x = snapshot.field_width * 0.5;
+    let half_width = (snapshot.goal_width * 0.5).max(1.0);
+    // Strayed off his own goal line (rushed out / caught high up the pitch).
+    let advance_yards = (keeper_position.y - goal_y).abs();
+    let advance_factor = ((advance_yards - 6.0) / 12.0).clamp(0.0, 1.0);
+    // Off the angle he should be covering (near-post biased toward the shooter).
+    let ideal_x = goal_center_x + (player_position.x - goal_center_x) * 0.25;
+    let lateral_offset = (keeper_position.x - ideal_x).abs();
+    let lateral_factor = ((lateral_offset - half_width) / (half_width * 2.0)).clamp(0.0, 1.0);
+    advance_factor.max(lateral_factor)
 }
 
 fn shot_beat_goalkeeper_probability_for_snapshot(
@@ -69215,6 +69285,9 @@ mod tests {
         observation.decision_urgency = 0.30;
         observation.goal_attack_window_score = 0.28;
         observation.yards_to_goal = 29.0;
+        // Keeper out of position so the long/mid-range shots clear the distance gate
+        // and the floor's monotonic rise with proximity can be exercised.
+        observation.opposing_goalkeeper_out_of_position = 0.9;
 
         observation.yards_to_goal = 42.0;
         observation.goal_attack_window_score = 0.08;
@@ -85477,10 +85550,24 @@ mod tests {
         observation.yards_to_goal = 38.0;
         observation.shot_block_probability = 0.16;
         observation.shot_on_frame_probability = 0.19;
-        observation.shot_beat_goalkeeper_probability = 0.03;
         observation.offensive_urgency = 0.55;
         observation.decision_urgency = 0.42;
 
+        // With a SET keeper, a 38-yard shot is off — distance discipline: don't blaze
+        // away from range at a keeper who is on his line.
+        observation.opposing_goalkeeper_out_of_position = 0.0;
+        assert!(
+            !speculative_long_shot_is_qualified(
+                &observation,
+                sim.players[attacker].role,
+                ability01(sim.players[attacker].skills.shooting)
+            ),
+            "a 38-yard shot at a set keeper must be gated out"
+        );
+
+        // With the keeper TOTALLY out of position, the long shot re-opens — but stays
+        // a low-weighted speculative option, never a must-shoot.
+        observation.opposing_goalkeeper_out_of_position = 0.9;
         assert!(
             !shot_decision_is_qualified_for_role(&observation, sim.players[attacker].role),
             "ordinary close-shot gates should stay conservative from range"
@@ -85516,6 +85603,73 @@ mod tests {
     }
 
     #[test]
+    fn long_shot_distance_discipline_keys_off_keeper_out_of_position() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 4242,
+            ..Default::default()
+        });
+        let attacker = 8;
+        let keeper = 11;
+        park_players_except(&mut sim, &[attacker, keeper]);
+        sim.players[attacker].role = PlayerRole::Forward;
+        sim.players[attacker].position = Vec2::new(40.0, 84.0);
+        sim.players[attacker].skills.shooting = 8.5;
+        sim.ball.holder = Some(attacker);
+        sim.ball.position = sim.players[attacker].position;
+        sim.ball.last_touch_team = Some(Team::Home);
+
+        // Keeper set on his line and central -> in position (~0).
+        sim.players[keeper].position = Vec2::new(40.0, 119.0);
+        let set_obs = WorldSnapshot::from_match(&sim).observation_for(attacker);
+        assert!(
+            set_obs.opposing_goalkeeper_out_of_position < 0.2,
+            "set keeper should read as in position: {}",
+            set_obs.opposing_goalkeeper_out_of_position
+        );
+
+        // Keeper rushed 20 yds off his line -> totally out of position.
+        sim.players[keeper].position = Vec2::new(40.0, 99.0);
+        let mut obs = WorldSnapshot::from_match(&sim).observation_for(attacker);
+        assert!(
+            obs.opposing_goalkeeper_out_of_position > 0.8,
+            "rushed keeper should read as out of position: {}",
+            obs.opposing_goalkeeper_out_of_position
+        );
+
+        obs.shot_lane_open = true;
+        obs.shot_block_probability = 0.10;
+        obs.shot_on_frame_probability = 0.20;
+        obs.offensive_urgency = 0.50;
+
+        // 30 yds: off at a set keeper, on only once the keeper is out of position.
+        obs.yards_to_goal = 30.0;
+        obs.opposing_goalkeeper_out_of_position = 0.0;
+        assert!(
+            !speculative_long_shot_is_qualified(&obs, PlayerRole::Forward, 0.85),
+            "30-yard shot at a set keeper is off"
+        );
+        obs.opposing_goalkeeper_out_of_position = 0.5;
+        assert!(
+            speculative_long_shot_is_qualified(&obs, PlayerRole::Forward, 0.85),
+            "30-yard shot with the keeper out of position is on"
+        );
+
+        // 40 yds: needs the keeper TOTALLY out of position.
+        obs.yards_to_goal = 40.0;
+        obs.opposing_goalkeeper_out_of_position = 0.5;
+        assert!(
+            !speculative_long_shot_is_qualified(&obs, PlayerRole::Forward, 0.85),
+            "40-yard shot needs the keeper totally out of position"
+        );
+        obs.opposing_goalkeeper_out_of_position = 0.85;
+        assert!(
+            speculative_long_shot_is_qualified(&obs, PlayerRole::Forward, 0.85),
+            "40-yard shot is on only with the keeper totally out of position"
+        );
+    }
+
+    #[test]
     fn learned_policy_can_take_open_lane_speculative_long_shot() {
         let mut sim = SoccerMatch::default_11v11(MatchConfig {
             duration_seconds: 0.1,
@@ -85539,7 +85693,9 @@ mod tests {
         observation.yards_to_goal = 36.0;
         observation.shot_block_probability = 0.14;
         observation.shot_on_frame_probability = 0.18;
-        observation.shot_beat_goalkeeper_probability = 0.04;
+        // Keeper out of position — the only condition under which a 36-yard
+        // speculative shot stays a legal learned action.
+        observation.opposing_goalkeeper_out_of_position = 0.9;
         observation.offensive_urgency = 0.48;
         observation.goal_attack_window_score = 0.20;
         let plan = SoccerLearnedPlan {
@@ -85573,8 +85729,10 @@ mod tests {
         sim.players[attacker].skills.shooting = 8.9;
         sim.players[attacker].skills.decision_noise = 0.0;
         sim.players[attacker].preferences.shoot_bias = 0.82;
-        sim.players[keeper].position = Vec2::new(40.0, 118.4);
-        sim.players[keeper].skills.goalkeeping = 9.8;
+        // Keeper rushed way out of his goal and off to one side — the goal is gaping,
+        // so the long speculative shot is on (and the q-policy may exploit it).
+        sim.players[keeper].position = Vec2::new(56.0, 98.0);
+        sim.players[keeper].skills.goalkeeping = 4.0;
         sim.ball.holder = Some(attacker);
         sim.ball.position = sim.players[attacker].position;
         sim.ball.last_touch_team = Some(Team::Home);
