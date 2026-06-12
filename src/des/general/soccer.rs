@@ -79,14 +79,14 @@ const CONTROL_AERIAL_JUMP_REACH_YARDS: f64 = 2.2;
 // disorientation) that decays with rest and degrades control/perception, and it
 // costs energy. Players therefore learn to watch the ball with economical
 // movement rather than whipping their head around.
-const MAX_BODY_YAW_RATE_RAD_S: f64 = 9.0; // ~515 deg/s, a hard biomechanical cap
+const MAX_BODY_YAW_RATE_RAD_S: f64 = 6.5; // ~372 deg/s, a hard biomechanical cap (players were spinning too fast)
 // While in possession the body cannot whip around — you have to keep the ball under
 // control, and the faster you are moving the less you can change direction (momentum).
 // The max yaw rate for the carrier ramps DOWN from a near-stop value to a sprint value
 // by speed fraction (current speed / the player's own top speed): a jogging carrier can
 // turn fairly tightly, a sprinting one only bends the run.
-const POSSESSION_MAX_YAW_RATE_SLOW_RAD_S: f64 = 4.8; // ~275 deg/s near a standstill
-const POSSESSION_MAX_YAW_RATE_FAST_RAD_S: f64 = 1.5; // ~86 deg/s at a flat-out sprint
+const POSSESSION_MAX_YAW_RATE_SLOW_RAD_S: f64 = 4.0; // ~229 deg/s near a standstill
+const POSSESSION_MAX_YAW_RATE_FAST_RAD_S: f64 = 1.2; // ~69 deg/s at a flat-out sprint
 // Angular-acceleration cap: the turn rate itself can only change this fast, so a
 // player cannot instantly start or stop spinning even on an instant decision
 // (~0.25 s to wind up to the max rate). Models rotational inertia of the body.
@@ -94,8 +94,8 @@ const MAX_BODY_YAW_ACCEL_RAD_S2: f64 = 80.0;
 // Human-scale mass bounds (lbs) the physics smoke report holds players within.
 const PLAYER_MIN_WEIGHT_POUNDS: f64 = 90.0;
 const PLAYER_MAX_WEIGHT_POUNDS: f64 = 320.0;
-const COMFORT_YAW_RATE_RAD_S: f64 = 3.5; // below this, turning is free of dizziness
-const DIZZINESS_GAIN_PER_RAD: f64 = 0.16; // accrual per rad/s over comfort, per sec
+const COMFORT_YAW_RATE_RAD_S: f64 = 2.8; // below this, turning is free of dizziness
+const DIZZINESS_GAIN_PER_RAD: f64 = 0.22; // accrual per rad/s over comfort, per sec
 const DIZZINESS_RECOVERY_PER_SECOND: f64 = 0.60;
 const DIZZINESS_MAX: f64 = 1.2;
 const DIZZINESS_CONTROL_PENALTY: f64 = 0.30; // control-radius loss at max dizziness
@@ -8370,10 +8370,13 @@ impl PlayerAgent {
             .clamp(0.01, (0.82 + escape_urgency * 0.26).clamp(0.82, 1.08));
         let feint_legal =
             observation.nearest_opponent_distance <= 5.2 && pressure_urgency.max(pressure) >= 0.34;
+        // Feints are already pressure-gated (feint_legal). Keep the ceiling low so a
+        // carrier does not throw a feint every other tick — fewer feints per second,
+        // reserved for when they're genuinely needed under pressure.
         let feint_score = (dribble_score
             * (0.22 + pressure_urgency * 0.66 + decision_urgency * 0.18)
             * (0.78 + dribbling * 0.28))
-            .clamp(0.01, 0.72);
+            .clamp(0.01, 0.55);
         let hold_up_flank_score = ((self.preferences.dribble_bias
             * (0.46 + dribbling * 0.42 + ability01(self.skills.strength) * 0.18)
             * (0.74 + pressure * 0.18)
@@ -24239,6 +24242,21 @@ impl WorldSnapshot {
                 } else {
                     short_pass_preference_bonus(dist, no_pressure)
                 };
+                // You can only pass the way you're facing — unless you backheel, which
+                // is only allowed in the opponent's half. Demote an own-half backheel
+                // so the carrier turns or picks a pass it is facing instead.
+                let backheel_penalty = self
+                    .player_facing_direction(me)
+                    .map(|facing| {
+                        if pass_is_backheel(facing, pass_point - me_position)
+                            && !position_in_opponent_half(me.team, me_position, self.field_length)
+                        {
+                            4.5
+                        } else {
+                            0.0
+                        }
+                    })
+                    .unwrap_or(0.0);
                 let score = forward * forward_weight + self.space_score_at(position, me.team)
                     - dist * 0.010
                     - support_fit * 0.020
@@ -24254,7 +24272,8 @@ impl WorldSnapshot {
                 let score = score + low_cross_policy_bonus
                     - blind_backward_penalty
                     - lateral_penalty
-                    - reception_teammate_penalty;
+                    - reception_teammate_penalty
+                    - backheel_penalty;
                 (p.id, score)
             })
             .collect::<Vec<_>>();
@@ -28698,6 +28717,16 @@ fn intercepted_pass_passer_penalty(pass: &PendingPass, field_length: f64) -> f64
     let own_half_cost = if own_half { 1.15 } else { 0.35 };
     let aerial_cost = if pass.flight.is_aerial() { 0.85 } else { 0.0 };
     (3.0 + openness_cost + direction_cost + own_half_cost + aerial_cost).clamp(4.0, 13.0)
+}
+
+/// A pass is a "backheel" when its direction is substantially behind where the player
+/// is facing (played back past the body line rather than out in front of them).
+fn pass_is_backheel(facing: Vec2, pass_dir: Vec2) -> bool {
+    if facing.len() < 1e-6 || pass_dir.len() < 1e-6 {
+        return false;
+    }
+    // cos(110°) ~= -0.34: a target more than ~110 deg off the facing line is a backheel.
+    facing.normalized().dot(pass_dir.normalized()) < -0.34
 }
 
 /// Preference bonus for shorter (<20 yd) passes that keep possession. Shorter is
@@ -71741,6 +71770,31 @@ mod tests {
             closed_penalty < open_penalty - 1.2,
             "closed/lateral interception should blame passer more: open={open_penalty} closed={closed_penalty}"
         );
+    }
+
+    #[test]
+    fn backheel_detection_and_opponent_half_only_rule() {
+        // Facing upfield (+y): a ball played straight back is a backheel; forward and
+        // sideways balls are not.
+        let facing = Vec2::new(0.0, 1.0);
+        assert!(pass_is_backheel(facing, Vec2::new(0.0, -1.0)));
+        assert!(pass_is_backheel(facing, Vec2::new(0.4, -1.0)));
+        assert!(!pass_is_backheel(facing, Vec2::new(0.0, 1.0)));
+        assert!(!pass_is_backheel(facing, Vec2::new(1.0, 0.2)));
+        assert!(!pass_is_backheel(Vec2::zero(), Vec2::new(0.0, -1.0)));
+
+        // Backheels are only allowed in the opponent's half.
+        let length = DEFAULT_FIELD_LENGTH_YARDS;
+        assert!(!position_in_opponent_half(
+            Team::Home,
+            Vec2::new(40.0, 30.0),
+            length
+        ));
+        assert!(position_in_opponent_half(
+            Team::Home,
+            Vec2::new(40.0, 90.0),
+            length
+        ));
     }
 
     #[test]
