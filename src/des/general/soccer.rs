@@ -473,6 +473,25 @@ const DRIBBLE_DWELL_GRACE_SECONDS: f64 = 2.1;
 const DRIBBLE_DWELL_RAMP_SECONDS: f64 = 3.0;
 const DRIBBLE_DWELL_DRIBBLE_DAMP: f64 = 0.28;
 const DRIBBLE_DWELL_RELEASE_LIFT: f64 = 0.22;
+// Anti-spasm: a holder commits to one dribble move-kind (and its touch) for this window
+// instead of re-rolling a fresh cut/feint/swivel every single tick. Without it the ball
+// jerks in a new direction each frame (the "spasm" look). ~0.45s is long enough to read as
+// one deliberate touch but short enough to still react. Stateless: the deterministic draws
+// are quantised to this window, so a committed move is stable across the window's ticks.
+const DRIBBLE_COMMIT_WINDOW_TICKS: u64 = secs_to_ticks(0.45);
+// Rate-of-change-of-pressure ("d(pressure)/dt") signal. A nearest opponent closing at this
+// speed (a hard sprint straight at the holder) saturates the rising signal; it only counts
+// while that opponent is within the engagement radius (a distant chaser must not spike it).
+const PRESSURE_RISING_REF_CLOSING_YPS: f64 = 6.0;
+const PRESSURE_RISING_ENGAGE_YARDS: f64 = 12.0;
+// How many seconds a fully-rising press (closing fast, in range) trims off the holder's
+// allowed on-ball dwell -- the lever that makes a holder pass SOONER under mounting pressure.
+const EXCESSIVE_HOLD_RISING_SHRINK_SECONDS: f64 = 0.9;
+// "Calm down and pass" damp on flashy evade moves (feint / side-step / swivel) when an
+// unpressured holder has a clean pass on. DAMP is the max fraction shaved off; FLOOR keeps
+// a legal evade from ever being fully zeroed (it can still fire if it's truly the best).
+const CALM_PASS_FOCUS_DAMP: f64 = 0.55;
+const CALM_PASS_FOCUS_FLOOR: f64 = 0.45;
 // Passing into a crowd gets the ball turned over even when the direct lane reads clear,
 // because the receiver is swarmed the instant it arrives. Count OPPONENTS within this
 // radius of the prospective reception point and tax expected completion per body, down to
@@ -7672,6 +7691,9 @@ fn choose_dribble_move_kind(rng: &mut SeededRandom) -> DribbleMoveKind {
 }
 
 fn deterministic_dribble_move_kind(tick: u64, player_id: usize) -> DribbleMoveKind {
+    // Anti-spasm: quantise to the commitment window so the chosen cut/carry holds
+    // steady across ~0.45s instead of re-rolling a new direction every tick.
+    let tick = tick - tick % DRIBBLE_COMMIT_WINDOW_TICKS;
     let mut value = tick
         .wrapping_mul(0x9e37_79b9_7f4a_7c15)
         .wrapping_add((player_id as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9));
@@ -7896,6 +7918,8 @@ fn probability_with_odds_multiplier(probability: f64, multiplier: f64) -> f64 {
 }
 
 fn deterministic_dribble_touch_bucket(tick: u64, player_id: usize, kind: DribbleMoveKind) -> u8 {
+    // Anti-spasm: hold the touch direction steady within the commitment window.
+    let tick = tick - tick % DRIBBLE_COMMIT_WINDOW_TICKS;
     sample_dribble_touch_bucket(kind, deterministic_unit_draw(tick, player_id, 17))
 }
 
@@ -8129,6 +8153,9 @@ impl PlayerAgent {
         let crossing = ability01(self.skills.crossing_left.max(self.skills.crossing_right));
         let pressure = observation.perceived_pressure.clamp(0.0, 1.0);
         let pressure_urgency = observation.pressure_urgency.clamp(0.0, 1.0);
+        // d(pressure)/dt: a defender closing fast. Drives "release sooner" (via
+        // excessive_hold) AND "body-shield now" (the protect-ball boost below).
+        let pressure_rising = pressure_rising_signal(observation);
         // In our own half, retention (shielding / safe dribbling) takes priority over
         // risky attacking dribbling — keep the ball rather than forcing it forward.
         let own_half = observation.yards_to_own_goal < observation.yards_to_goal;
@@ -8376,8 +8403,11 @@ impl PlayerAgent {
             .clamp(0.01, carry_out_escape_ceiling);
         let carry_out_left_legal = carry_out_legal && left_room > 2.0;
         let carry_out_right_legal = carry_out_legal && right_room > 2.0;
-        let protect_ball_legal =
-            observation.nearest_opponent_distance <= 5.2 || pressure_urgency.max(pressure) >= 0.24;
+        let protect_ball_legal = observation.nearest_opponent_distance <= 5.2
+            || pressure_urgency.max(pressure) >= 0.24
+            // A fast-closing defender makes shielding legal a touch earlier (before
+            // they're already on top of you) so the body gets between in time.
+            || (pressure_rising >= 0.30 && observation.nearest_opponent_distance <= 7.5);
         // Body-shield to SECURE possession when a defender is goal-side and the
         // forward path is blocked (same `forward_blocked` signal as the escape
         // carry above): with the opponent between you and goal you have few
@@ -8396,7 +8426,8 @@ impl PlayerAgent {
             * pressure_urgency.max(pressure);
         let own_half_retention = if own_half { 0.30 } else { 0.0 };
         let protect_ball_ceiling =
-            (0.88 + goal_side_shield * 0.34 + own_half_retention).clamp(0.88, 1.40);
+            (0.88 + goal_side_shield * 0.34 + own_half_retention + pressure_rising * 0.22)
+                .clamp(0.88, 1.46);
         let protect_ball_score = (dribble_score
             * (0.12
                 + pressure_urgency.max(pressure) * 0.76
@@ -8404,8 +8435,22 @@ impl PlayerAgent {
                 + goal_side_shield * 0.46
                 + fresh_receipt_shield * 0.55
                 + own_half_retention
+                // Rising pressure (a man bearing down) is exactly when you turn your
+                // body between him and the ball -- lift the shield's urgency hard.
+                + pressure_rising * 0.62
                 + (1.0 - observation.perceived_time_on_ball_seconds / 2.8).clamp(0.0, 1.0) * 0.24))
             .clamp(0.01, protect_ball_ceiling);
+        // Calm on the ball: when a clean pass is on and the holder is NOT under real
+        // heat, they should settle and pass rather than throw flashy feints / side-steps
+        // / swivels. This damps the evade moves by how good the available pass is, scaled
+        // by how unpressured they are (and how slowly pressure is rising) -- it melts away
+        // the instant a defender is genuinely on them. Floored so a legal evade is never
+        // fully zeroed.
+        let calm_quiet =
+            ((1.0 - pressure_urgency.max(pressure)) * (1.0 - pressure_rising)).clamp(0.0, 1.0);
+        let calm_pass_focus = (1.0
+            - calm_quiet * floor_pass_quality.clamp(0.0, 1.0) * CALM_PASS_FOCUS_DAMP)
+            .clamp(CALM_PASS_FOCUS_FLOOR, 1.0);
         let side_step_legal =
             observation.nearest_opponent_distance <= 4.6 && pressure_urgency.max(pressure) >= 0.28;
         // The side-step is the dedicated evade — knock the ball away from the
@@ -8415,16 +8460,19 @@ impl PlayerAgent {
             * (0.30 + pressure_urgency.max(pressure) * 0.88)
             * (1.0
                 + (1.0 - observation.forward_dribble_space_yards / 14.0).clamp(0.0, 1.0) * 0.24
-                + escape_urgency * 0.55))
+                + escape_urgency * 0.55)
+            * calm_pass_focus)
             .clamp(0.01, (0.82 + escape_urgency * 0.26).clamp(0.82, 1.08));
         let feint_legal =
             observation.nearest_opponent_distance <= 5.2 && pressure_urgency.max(pressure) >= 0.34;
         // Feints are already pressure-gated (feint_legal). Keep the ceiling low so a
         // carrier does not throw a feint every other tick — fewer feints per second,
-        // reserved for when they're genuinely needed under pressure.
+        // reserved for when they're genuinely needed under pressure. The calm-pass-focus
+        // damp suppresses them further when an unpressured holder has a clean pass on.
         let feint_score = (dribble_score
             * (0.22 + pressure_urgency * 0.66 + decision_urgency * 0.18)
-            * (0.78 + dribbling * 0.28))
+            * (0.78 + dribbling * 0.28)
+            * calm_pass_focus)
             .clamp(0.01, 0.55);
         let hold_up_flank_score = ((self.preferences.dribble_bias
             * (0.46 + dribbling * 0.42 + ability01(self.skills.strength) * 0.18)
@@ -23749,6 +23797,11 @@ impl WorldSnapshot {
                 perceived_pressure,
                 immediate_dispossession_risk,
                 ability01(me.skills.dribbling),
+                // Closing-rate-driven shrink is applied in the policy via the
+                // `excessive_hold_pressure(observation, ..)` wrapper (the live release
+                // path), which has the full neural-extended closing rate; the stored
+                // snapshot field stays the static-pressure baseline.
+                0.0,
             )
         } else {
             0.0
@@ -27188,11 +27241,14 @@ impl WorldSnapshot {
             return DribbleTouchDecision::default();
         };
         let bucket = deterministic_dribble_touch_bucket(self.tick, player_id, kind);
+        // Anti-spasm: quantise the touch-distance draw to the same commitment window
+        // so the committed touch (direction + length) is stable across the window.
+        let committed_tick = self.tick - self.tick % DRIBBLE_COMMIT_WINDOW_TICKS;
         let distance = self.dribble_touch_distance_for(
             me,
             kind,
             bucket,
-            deterministic_unit_draw(self.tick, player_id, 29),
+            deterministic_unit_draw(committed_tick, player_id, 29),
         );
         DribbleTouchDecision::new(bucket, distance)
     }
@@ -27336,8 +27392,13 @@ impl WorldSnapshot {
             }
             DribbleMoveKind::ProtectBall => nearest_defender
                 .map(|(_, defender_position, _)| {
-                    let away = (current - defender_position).normalized();
-                    (away * 0.86 + Vec2::new(0.0, me.team.attack_dir()) * 0.18).normalized()
+                    // Body-shield: lead the ball to the EXACT opposite side of the body
+                    // from the defender, so the holder's own body is the barrier between
+                    // the defender and the ball. Pure away-from-defender (no forward lean,
+                    // which would skew the ball off the shielding line when the press
+                    // comes from the side). The body then trails the ball toward the
+                    // defender by one touch-lead, planting itself in between.
+                    (current - defender_position).normalized()
                 })
                 .unwrap_or_else(|| Vec2::new(0.0, me.team.attack_dir())),
             _ => touch.direction_for_team(me.team),
@@ -63886,6 +63947,26 @@ fn time_on_ball_seconds(pressure: f64) -> f64 {
     (2.8 - pressure.clamp(0.0, 1.0) * 2.35).clamp(0.25, 3.0)
 }
 
+/// Rate-of-change of pressure: how fast the nearest opponent is closing the holder
+/// down, normalised to [0, 1] -- the "pressure is increasing per unit time"
+/// (d(pressure)/dt) signal the holder reacts to *before* the gap is already tiny.
+/// A defender sprinting in raises urgency to release the ball sooner and to body-
+/// shield, even while the current static pressure still reads moderate. Gated by
+/// proximity so a distant chaser does not spike it.
+fn pressure_rising_signal(observation: &SoccerPomdpObservation) -> f64 {
+    let closing = observation
+        .neural_extended
+        .nearest_opponent_closing_rate_yps
+        .max(0.0);
+    if closing <= 0.0 {
+        return 0.0;
+    }
+    let closing01 = (closing / PRESSURE_RISING_REF_CLOSING_YPS).clamp(0.0, 1.0);
+    let proximity = (1.0 - observation.nearest_opponent_distance / PRESSURE_RISING_ENGAGE_YARDS)
+        .clamp(0.0, 1.0);
+    return (closing01 * proximity).clamp(0.0, 1.0);
+}
+
 fn dribble_hold_base_seconds(dribbling: f64) -> f64 {
     let dribbling = dribbling.clamp(0.0, 1.0);
     let elite_hold_start = 0.86;
@@ -63903,6 +63984,7 @@ fn excessive_hold_pressure_from_parts(
     perceived_pressure: f64,
     immediate_dispossession_risk: f64,
     dribbling: f64,
+    pressure_rising: f64,
 ) -> f64 {
     let actual_hold = actual_time_on_ball_seconds.max(0.0);
     if actual_hold <= 0.0 {
@@ -63912,9 +63994,13 @@ fn excessive_hold_pressure_from_parts(
         .max(defensive_urgency)
         .max(perceived_pressure)
         .clamp(0.0, 1.0);
+    // A defender closing fast shrinks the time you can dwell on the ball: subtract
+    // from the allowed on-ball budget in proportion to how fast pressure is rising,
+    // so the holder is pushed to release sooner BEFORE the gap is already gone.
     let allowed_seconds = (dribble_hold_base_seconds(dribbling)
         - urgency * 1.55
-        - immediate_dispossession_risk.clamp(0.0, 1.0) * 1.00)
+        - immediate_dispossession_risk.clamp(0.0, 1.0) * 1.00
+        - pressure_rising.clamp(0.0, 1.0) * EXCESSIVE_HOLD_RISING_SHRINK_SECONDS)
         .clamp(0.55, ELITE_DRIBBLE_HOLD_BASE_SECONDS + 0.75);
     ((actual_hold - allowed_seconds) / 3.2).clamp(0.0, 1.0)
 }
@@ -63927,6 +64013,7 @@ fn excessive_hold_pressure(observation: &SoccerPomdpObservation, dribbling: f64)
         observation.perceived_pressure,
         observation.immediate_dispossession_risk,
         dribbling,
+        pressure_rising_signal(observation),
     )
 }
 
@@ -106489,6 +106576,213 @@ tick,player_id,team,role,x,y,ball_x,ball_y,tracking_confidence,ball_confidence,p
             }
             other => panic!("expected protect-ball dribble, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pressure_rising_signal_tracks_closing_defender() {
+        let sim = SoccerMatch::default_11v11(MatchConfig::default());
+        let mut observation = WorldSnapshot::from_match(&sim).observation_for(8);
+        observation.nearest_opponent_distance = 4.0;
+
+        // A defender sprinting straight in raises the signal.
+        observation.neural_extended.nearest_opponent_closing_rate_yps = 6.0;
+        let closing = pressure_rising_signal(&observation);
+        assert!(
+            closing > 0.45,
+            "a fast-closing in-range defender should read as rising pressure: {closing}"
+        );
+
+        // Standing off / retreating defender: no rising pressure.
+        observation.neural_extended.nearest_opponent_closing_rate_yps = -2.0;
+        assert_eq!(pressure_rising_signal(&observation), 0.0);
+
+        // Same closing speed but far away must not spike it.
+        observation.neural_extended.nearest_opponent_closing_rate_yps = 6.0;
+        observation.nearest_opponent_distance = 30.0;
+        assert_eq!(pressure_rising_signal(&observation), 0.0);
+    }
+
+    #[test]
+    fn rising_pressure_makes_holder_release_sooner() {
+        let sim = SoccerMatch::default_11v11(MatchConfig::default());
+        let mut observation = WorldSnapshot::from_match(&sim).observation_for(8);
+        observation.has_ball = true;
+        observation.actual_time_on_ball_seconds = 3.0;
+        observation.pressure_urgency = 0.30;
+        observation.perceived_pressure = 0.30;
+        observation.defensive_urgency = 0.0;
+        observation.immediate_dispossession_risk = 0.0;
+        observation.nearest_opponent_distance = 3.0;
+        let dribbling = 0.6;
+
+        observation.neural_extended.nearest_opponent_closing_rate_yps = 0.0;
+        let steady = excessive_hold_pressure(&observation, dribbling);
+        observation.neural_extended.nearest_opponent_closing_rate_yps = 6.0;
+        let rising = excessive_hold_pressure(&observation, dribbling);
+
+        assert!(
+            rising > steady + 0.05,
+            "a closing defender should shrink the on-ball budget so the holder must \
+             release sooner: rising={rising} steady={steady}"
+        );
+    }
+
+    #[test]
+    fn rising_pressure_lifts_body_shield_score() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 26_133,
+            ..Default::default()
+        });
+        let holder = 8;
+        let defender = 12;
+        park_players_except(&mut sim, &[holder, defender]);
+        sim.players[holder].position = Vec2::new(40.0, 70.0);
+        sim.players[holder].home_position = sim.players[holder].position;
+        sim.players[holder].skills.dribbling = 7.0;
+        sim.players[holder].skills.strength = 7.5;
+        sim.players[defender].position = Vec2::new(44.5, 70.0);
+        sim.ball.holder = Some(holder);
+        sim.ball.position = sim.players[holder].position;
+        sim.ball.last_touch_team = Some(Team::Home);
+
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let directive = snapshot.tactical_directive(Team::Home);
+        let base_obs = snapshot.observation_for(holder);
+
+        let shield_score = |closing: f64| -> f64 {
+            let mut observation = base_obs.clone();
+            observation.pressure_urgency = 0.30;
+            observation.perceived_pressure = 0.30;
+            observation.neural_extended.nearest_opponent_closing_rate_yps = closing;
+            let options = sim.players[holder].possession_action_options(
+                &observation,
+                &directive,
+                0,
+                0,
+                false,
+                snapshot.dt_seconds,
+                snapshot.field_width,
+            );
+            action_option_score(&options, "protect-ball")
+        };
+
+        let steady = shield_score(0.0);
+        let rising = shield_score(6.0);
+        assert!(
+            rising > steady,
+            "a fast-closing defender should make body-shielding score higher: \
+             rising={rising} steady={steady}"
+        );
+    }
+
+    #[test]
+    fn protect_ball_leads_ball_to_far_side_of_body() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 26_134,
+            ..Default::default()
+        });
+        let holder = 8;
+        let defender = 12;
+        park_players_except(&mut sim, &[holder, defender]);
+        let holder_pos = Vec2::new(40.0, 70.0);
+        let defender_pos = Vec2::new(43.0, 71.5);
+        sim.players[holder].position = holder_pos;
+        sim.players[holder].home_position = holder_pos;
+        sim.players[defender].position = defender_pos;
+        sim.ball.holder = Some(holder);
+        sim.ball.position = holder_pos;
+
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let target = snapshot.dribble_move_target_for_touch(
+            holder,
+            holder_pos,
+            DribbleMoveKind::ProtectBall,
+            DribbleTouchDecision::new(0, 1.0),
+        );
+        let to_target = target - holder_pos;
+        let to_defender = defender_pos - holder_pos;
+        // The shield lead must point AWAY from the defender (ball on the far side of
+        // the body), so the body sits between the defender and the ball.
+        assert!(
+            dot(to_target, to_defender) < 0.0,
+            "protect-ball should lead the ball to the far side of the body from the \
+             defender: to_target={to_target:?} to_defender={to_defender:?}"
+        );
+    }
+
+    #[test]
+    fn dribble_move_kind_is_committed_within_window() {
+        let window = DRIBBLE_COMMIT_WINDOW_TICKS;
+        assert!(window >= 2, "commitment window should span multiple ticks");
+        let player_id = 7;
+        for w in [0u64, 3, 11] {
+            let base = w * window;
+            let committed = deterministic_dribble_move_kind(base, player_id);
+            for offset in 0..window {
+                assert_eq!(
+                    deterministic_dribble_move_kind(base + offset, player_id),
+                    committed,
+                    "dribble move-kind must stay committed across the window (w={w}, offset={offset})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unpressured_holder_with_clean_pass_throws_fewer_feints() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 26_135,
+            ..Default::default()
+        });
+        let holder = 8;
+        let defender = 12;
+        park_players_except(&mut sim, &[holder, defender]);
+        sim.players[holder].position = Vec2::new(40.0, 64.0);
+        sim.players[holder].home_position = sim.players[holder].position;
+        sim.players[holder].skills.dribbling = 7.0;
+        // Defender close enough that a feint is legal, but the holder is not yet in
+        // genuine duress (moderate static pressure, no closing).
+        sim.players[defender].position = Vec2::new(44.4, 64.0);
+        sim.ball.holder = Some(holder);
+        sim.ball.position = sim.players[holder].position;
+
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let directive = snapshot.tactical_directive(Team::Home);
+        let base_obs = snapshot.observation_for(holder);
+
+        let feint_score = |clean_pass: bool| -> f64 {
+            let mut observation = base_obs.clone();
+            observation.pressure_urgency = 0.36;
+            observation.perceived_pressure = 0.36;
+            observation.neural_extended.nearest_opponent_closing_rate_yps = 0.0;
+            let (completion, openness, lane) =
+                if clean_pass { (0.92, 0.9, 0.9) } else { (0.12, 0.1, 0.1) };
+            observation.expected_pass_completion = completion;
+            observation.best_pass_receiver_openness = openness;
+            observation.floor_pass_lane_score = lane;
+            let options = sim.players[holder].possession_action_options(
+                &observation,
+                &directive,
+                2,
+                1,
+                false,
+                snapshot.dt_seconds,
+                snapshot.field_width,
+            );
+            action_option_score(&options, "fake-left-cut-right")
+                .max(action_option_score(&options, "fake-right-cut-left"))
+        };
+
+        let with_pass = feint_score(true);
+        let without_pass = feint_score(false);
+        assert!(
+            with_pass < without_pass,
+            "an unpressured holder with a clean pass on should feint LESS (settle and \
+             pass): with_pass={with_pass} without_pass={without_pass}"
+        );
     }
 
     #[test]
