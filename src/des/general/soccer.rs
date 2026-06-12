@@ -16005,6 +16005,11 @@ pub struct MatchConfig {
     pub spacing: SoccerSpacingParams,
     #[serde(default = "default_neural_learning_config")]
     pub neural_learning: SoccerNeuralLearningConfig,
+    /// Decision-time coupling of the trained neural value/actor to the tabular
+    /// MDP/POMDP policy. Off by default (play unchanged); `live_gameplay` turns on an
+    /// Additive + actor-critic blend so the nets integrate with the tabular policy.
+    #[serde(default)]
+    pub neural_blend: SoccerNeuralBlendConfig,
     #[serde(default = "default_adversarial_embedding_exploitation_enabled")]
     pub adversarial_embedding_exploitation_enabled: bool,
     #[serde(default = "default_adversarial_moment_memory_limit")]
@@ -16041,6 +16046,7 @@ impl Default for MatchConfig {
             tactical_learning: SoccerTacticalLearningWeights::default(),
             spacing: SoccerSpacingParams::default(),
             neural_learning: SoccerNeuralLearningConfig::default(),
+            neural_blend: SoccerNeuralBlendConfig::default(),
             adversarial_embedding_exploitation_enabled: true,
             adversarial_embedding_memory_limit: DEFAULT_ADVERSARIAL_MOMENT_MEMORY_LIMIT,
             max_human_players: 4,
@@ -16078,6 +16084,7 @@ impl MatchConfig {
             learning_interval_ticks: 1,
             full_game_learning_enabled: true,
             formation_lp_enabled: true,
+<<<<<<< HEAD
             q_training_threaded: true,
             // Continuous headless self-play accelerates learning ~100×+ and runs even while
             // the browser is idle — BUT the long-lived worker match currently grows RSS into
@@ -16101,6 +16108,24 @@ impl MatchConfig {
             // approximation (value+policy blend at decision time) is unaffected. Re-enable
             // once it's throttled/cached against the larger net.
             adversarial_embedding_exploitation_enabled: false,
+=======
+            // Full synergy in real games: the neural value/actor TRAIN (threaded) AND
+            // feed back into selection (Additive blend + actor-critic) so the nets
+            // integrate with the tabular MDP/POMDP policy, and the trained critic
+            // couples back to the LP (simplex/IPM) formation solver.
+            neural_learning: SoccerNeuralLearningConfig {
+                enabled: true,
+                backend: SoccerNeuralLearningBackend::Threaded,
+                lp_coupling_enabled: true,
+                ..SoccerNeuralLearningConfig::default()
+            },
+            neural_blend: SoccerNeuralBlendConfig {
+                mode: SoccerNeuralBlendMode::Additive,
+                actor_critic: true,
+                ..SoccerNeuralBlendConfig::default()
+            },
+            adversarial_embedding_exploitation_enabled: true,
+>>>>>>> 2211d6a (feat(soccer-learning): activate neural<->MDP/POMDP<->LP synergy in gameplay defaults)
             max_human_players: 4,
             ..MatchConfig::default()
         }
@@ -44481,8 +44506,12 @@ impl SoccerMatch {
             } else {
                 None
             },
+<<<<<<< HEAD
             neural_blend: SoccerNeuralBlendConfig::default(),
             neural_formation_intent_cache: SoccerNeuralFormationIntent::default(),
+=======
+            neural_blend: config.neural_blend,
+>>>>>>> 2211d6a (feat(soccer-learning): activate neural<->MDP/POMDP<->LP synergy in gameplay defaults)
             policy_head: None,
             world_model: None,
             human_inputs: SharedHumanInputs::new(),
@@ -90400,6 +90429,12 @@ mod tests {
             SoccerNeuralLearningBackend::Threaded
         );
         assert!(config.adversarial_embedding_exploitation_enabled);
+        // Synergy must be ACTIVE in real games, not just trained-and-ignored: the
+        // neural value/actor blend into MDP/POMDP action selection, and the trained
+        // critic couples back to the LP formation solver.
+        assert_eq!(config.neural_blend.mode, SoccerNeuralBlendMode::Additive);
+        assert!(config.neural_blend.actor_critic);
+        assert!(config.neural_learning.lp_coupling_enabled);
     }
 
     #[test]
