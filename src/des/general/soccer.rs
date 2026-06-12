@@ -543,6 +543,16 @@ const OWN_BOX_ACROSS_GOAL_PENALTY: f64 = 3.8;
 // … UNLESS the lane is highly uncontested (no opponent within this of the pass lane), i.e. a
 // clean switch from one side of the box to the other.
 const OWN_BOX_ACROSS_GOAL_SAFE_LANE_YARDS: f64 = 6.0;
+// "Gift pass" guard. An opponent ambling under ~4 mph is comfortably set and will trivially
+// collect any ball played straight at them: passing directly to such a player (on the
+// trajectory, or arriving at their feet) is the lowest-skill turnover there is. A pass whose
+// path runs through, or whose reception point sits on, a SLOW opponent is collapsed toward a
+// near-zero completion so the ranker (and the holder's pass-vs-hold decision) avoids it,
+// driving the direct-to-opponent rate toward zero.
+const SLOW_OPPONENT_MAX_SPEED_YPS: f64 = 1.96; // ~4 mph
+const GIFT_PASS_LANE_RADIUS_YARDS: f64 = 1.7;
+const GIFT_PASS_ENDPOINT_RADIUS_YARDS: f64 = 2.6;
+const GIFT_PASS_QUALITY_FLOOR: f64 = 0.05;
 // Per-yard reward for a forward pass to an OPEN receiver (openness 0..1 × forward yards, capped
 // at 24yd). Biases pass selection toward playing forward to the most-open player.
 const FORWARD_OPEN_PASS_BONUS_PER_YARD: f64 = 0.05;
@@ -65641,6 +65651,54 @@ struct PassTargetQuality {
     stride_fit: f64,
 }
 
+/// Multiplier in [GIFT_PASS_QUALITY_FLOOR, 1.0]: collapses toward the floor when a SLOW
+/// (< ~4 mph) opponent sits on the pass trajectory (`include_lane`) or at the reception
+/// point -- i.e. the ball would be played straight to a set defender. Returns 1.0 when no
+/// such opponent is in the way. The slower/more dead-centre the opponent, the harder the
+/// collapse. Goalkeepers are exempt (a pass arriving at the keeper is handled elsewhere).
+fn slow_opponent_gift_factor(
+    snapshot: &WorldSnapshot,
+    passer: &PlayerSnapshot,
+    passer_position: Vec2,
+    anticipated_target: Vec2,
+    include_lane: bool,
+) -> f64 {
+    let mut worst = 1.0_f64;
+    for opponent in snapshot.players.iter().filter(|p| p.team != passer.team) {
+        if opponent.role == PlayerRole::Goalkeeper {
+            continue;
+        }
+        let speed = snapshot
+            .player_velocity(opponent.id)
+            .unwrap_or(opponent.velocity)
+            .len();
+        if speed >= SLOW_OPPONENT_MAX_SPEED_YPS {
+            continue;
+        }
+        let position = snapshot
+            .player_position(opponent.id)
+            .unwrap_or(opponent.position);
+        let endpoint_dist = position.distance(anticipated_target);
+        let at_endpoint = endpoint_dist <= GIFT_PASS_ENDPOINT_RADIUS_YARDS;
+        let lane_dist = if include_lane {
+            distance_to_segment(position, passer_position, anticipated_target)
+        } else {
+            f64::INFINITY
+        };
+        let in_lane = lane_dist <= GIFT_PASS_LANE_RADIUS_YARDS;
+        if !at_endpoint && !in_lane {
+            continue;
+        }
+        // The closer the set opponent is to the line/endpoint, the more certain the gift.
+        let endpoint_prox = (1.0 - endpoint_dist / GIFT_PASS_ENDPOINT_RADIUS_YARDS).clamp(0.0, 1.0);
+        let lane_prox = (1.0 - lane_dist / GIFT_PASS_LANE_RADIUS_YARDS).clamp(0.0, 1.0);
+        let proximity = endpoint_prox.max(lane_prox);
+        let factor = (1.0 - proximity).clamp(GIFT_PASS_QUALITY_FLOOR, 1.0);
+        worst = worst.min(factor);
+    }
+    return worst;
+}
+
 fn pass_target_quality_for_snapshot(
     snapshot: &WorldSnapshot,
     passer: &PlayerSnapshot,
@@ -65752,13 +65810,23 @@ fn pass_target_quality_for_snapshot(
         (1.0 - (distance - 18.0).abs() / 42.0).clamp(0.20, 1.0)
     };
     let pressure_adjustment = 0.80 + receiver_openness * 0.20;
+    // Never hand the ball to a set defender: collapse completion when a slow (<4 mph)
+    // opponent is on the trajectory (floor only) or at the reception point (any flight).
+    let gift_factor = slow_opponent_gift_factor(
+        snapshot,
+        passer,
+        passer_position,
+        anticipated_target,
+        !flight.is_aerial(),
+    );
     let expected_completion = (0.10
         + pass_skill * 0.38
         + lane * 0.22
         + receiver_openness * 0.18
         + distance_fit * 0.08
         + stride_fit * 0.08)
-        * pressure_adjustment;
+        * pressure_adjustment
+        * gift_factor;
     PassTargetQuality {
         receiver_openness,
         stride_fit,
@@ -106782,6 +106850,63 @@ tick,player_id,team,role,x,y,ball_x,ball_y,tracking_confidence,ball_confidence,p
             with_pass < without_pass,
             "an unpressured holder with a clean pass on should feint LESS (settle and \
              pass): with_pass={with_pass} without_pass={without_pass}"
+        );
+    }
+
+    #[test]
+    fn pass_straight_to_a_slow_opponent_is_treated_as_a_gift() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 26_140,
+            ..Default::default()
+        });
+        let passer = 6;
+        let receiver = 9;
+        let blocker = 14; // an opponent (away team)
+        park_players_except(&mut sim, &[passer, receiver, blocker]);
+        let passer_pos = Vec2::new(40.0, 40.0);
+        let receiver_pos = Vec2::new(40.0, 58.0);
+        sim.players[passer].position = passer_pos;
+        sim.players[passer].home_position = passer_pos;
+        sim.players[passer].skills.passing_completion_rate = 7.5;
+        sim.players[receiver].position = receiver_pos;
+        sim.players[receiver].home_position = receiver_pos;
+        sim.ball.holder = Some(passer);
+        sim.ball.position = passer_pos;
+
+        let completion = |sim: &SoccerMatch| -> f64 {
+            let snap = WorldSnapshot::from_match(sim);
+            let p = snap.players.iter().find(|p| p.id == passer).unwrap();
+            let t = snap.players.iter().find(|p| p.id == receiver).unwrap();
+            let p_pos = snap.player_position(passer).unwrap_or(p.position);
+            let t_pos = snap.player_position(receiver).unwrap_or(t.position);
+            pass_target_quality_for_snapshot(&snap, p, p_pos, t, t_pos, PassFlight::Floor)
+                .expected_completion
+        };
+
+        // Set defender (barely moving) parked dead in the passing lane = a gift.
+        sim.players[blocker].position = Vec2::new(40.0, 49.0);
+        sim.players[blocker].velocity = Vec2::zero();
+        let gift = completion(&sim);
+
+        // Same slow defender, but off to the side (not in the lane / endpoint) = fine.
+        sim.players[blocker].position = Vec2::new(62.0, 49.0);
+        let clear = completion(&sim);
+
+        // Back in the lane but sprinting across it = not the same dead gift.
+        sim.players[blocker].position = Vec2::new(40.0, 49.0);
+        sim.players[blocker].velocity = Vec2::new(7.0, 0.0);
+        let moving = completion(&sim);
+
+        assert!(
+            gift < clear * 0.5,
+            "a floor pass straight through a set (<4mph) defender must be heavily \
+             down-weighted: gift={gift} clear={clear}"
+        );
+        assert!(
+            moving > gift,
+            "a fast defender crossing the lane is not the same dead gift as a set one: \
+             moving={moving} gift={gift}"
         );
     }
 
