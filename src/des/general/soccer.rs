@@ -211,7 +211,16 @@ const BALL_HOLDER_CORE_VISION_DEGREES: f64 = 100.0;
 const BALL_HOLDER_SHOULDER_VISION_DEGREES: f64 = 20.0;
 const BALL_HOLDER_CORE_POSITION_CONFIDENCE: f64 = 0.90;
 const BALL_HOLDER_SHOULDER_POSITION_CONFIDENCE: f64 = 0.70;
-const WINGBACK_ADVANCE_ODDS_MULTIPLIER: f64 = 1.70;
+// Wing-backs push forward MORE often than central defenders — the back line should
+// not move as a symmetric block. Raised so the outside backs bomb on while the
+// centre-backs hold (see also central_defender_forward_blocked / defender depth).
+const WINGBACK_ADVANCE_ODDS_MULTIPLIER: f64 = 2.05;
+// Central-defender lane: |home_x - centre| within this fraction of the width is a
+// centre-back (the complement of is_wide_defender's 0.28/0.72 split).
+const CENTRAL_DEFENDER_LANE_HALF_FRACTION: f64 = 0.22;
+// A centre-back will not dribble the ball forward unless it has at least this much
+// open space ahead (i.e. no opponent within ~5 yds in front).
+const CENTRAL_DEFENDER_FORWARD_DRIBBLE_MIN_SPACE_YARDS: f64 = 5.0;
 const DEFENSIVE_MID_CENTER_BACK_COVER_RADIUS_YARDS: f64 = 10.0;
 const PROBABILITY_REFERENCE_DT_SECONDS: f64 = 1.0;
 const DRIBBLE_TOUCH_LEAD_YARDS: f64 = 0.92;
@@ -854,6 +863,14 @@ const FORMATION_LP_MIDFIELDER_LINE_Y_WEIGHT: f64 = 0.16;
 const POSITIONAL_SHAPE_REWARD_CLAMP: f64 = 0.85;
 const PRESSURED_SUPPORT_SPRINT_URGENCY: f64 = 0.34;
 const DEFENSIVE_GOAL_LINE_BUFFER_YARDS: f64 = 6.0;
+// Defenders should sit 8-10 yds off their own goal line by default and be pushed away
+// from the line overall — they only drop closer than the 6-yard buffer when the ball
+// is right on top of them (behind them, near the goal line).
+const PREFERRED_DEFENDER_DEPTH_YARDS: f64 = 8.5;
+// The back line only pushes out to the preferred 8-10 yd depth when the ball is beyond
+// this distance from their own goal. With the ball nearer (a genuine threat in the
+// defensive third) they may still drop to the 6-yard buffer.
+const DEFENDER_PREFERRED_DEPTH_BALL_CUTOFF_YARDS: f64 = 25.0;
 const DEFENSIVE_GOAL_LINE_HARD_BUFFER_YARDS: f64 = 4.0;
 const DEFENSIVE_MAX_BEHIND_BALL_YARDS: f64 = 30.0;
 // Back-line compactness: the defensive line never sits more than this far goal-side of
@@ -8239,9 +8256,19 @@ impl PlayerAgent {
             * hold_penalty_multiplier)
             .clamp(0.02, 1.75);
         let patient_carry_score_base = (dribble_score * patient_carry_multiplier).clamp(0.02, 1.58);
+        // Central defenders must stay back: they do NOT dribble the ball forward when
+        // an opponent is within ~5 yds in front of them (little open space ahead).
+        // Wing-backs / full-backs are exempt — they are the ones meant to push on.
+        let is_central_defender = self.role == PlayerRole::Defender
+            && (self.home_position.x - field_width_yards * 0.5).abs()
+                <= field_width_yards * CENTRAL_DEFENDER_LANE_HALF_FRACTION;
+        let central_defender_forward_blocked = is_central_defender
+            && observation.forward_dribble_space_yards
+                < CENTRAL_DEFENDER_FORWARD_DRIBBLE_MIN_SPACE_YARDS;
         let carry_forward_legal = (observation.forward_dribble_space_yards >= 1.2
             || goalmouth_carry_forced)
-            && !goal_attack_shot_required;
+            && !goal_attack_shot_required
+            && !central_defender_forward_blocked;
         let carry_forward_score = (patient_carry_score_base
             * (0.34 + patience_factor * 0.62 + poor_floor_pass * 0.36 + forward_space_fit * 0.34)
             * (1.0
@@ -22187,9 +22214,15 @@ impl WorldSnapshot {
             PlayerRole::Goalkeeper => 0.0,
             PlayerRole::Defender => {
                 if ball_depth <= DEFENSIVE_GOAL_LINE_BUFFER_YARDS {
+                    // Ball is on the goal line / behind them — drop in to defend it.
                     0.0
-                } else {
+                } else if ball_depth <= DEFENDER_PREFERRED_DEPTH_BALL_CUTOFF_YARDS {
+                    // Ball still a threat in the defensive third: the 6-yard line is as
+                    // deep as they go.
                     DEFENSIVE_GOAL_LINE_BUFFER_YARDS
+                } else {
+                    // Ball upfield: hold the line 8-10 yds off goal — pushed away from it.
+                    PREFERRED_DEFENDER_DEPTH_YARDS
                 }
             }
             PlayerRole::Midfielder => {
@@ -71769,6 +71802,119 @@ mod tests {
         assert!(
             closed_penalty < open_penalty - 1.2,
             "closed/lateral interception should blame passer more: open={open_penalty} closed={closed_penalty}"
+        );
+    }
+
+    #[test]
+    fn central_defender_will_not_dribble_forward_into_a_close_opponent() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 9,
+            ..Default::default()
+        });
+        let width = sim.config.field_width_yards;
+        let cb = sim
+            .players
+            .iter()
+            .find(|p| {
+                p.team == Team::Home
+                    && p.role == PlayerRole::Defender
+                    && (p.home_position.x - width * 0.5).abs() <= width * 0.22
+            })
+            .map(|p| p.id)
+            .expect("a central defender");
+        sim.players[cb].position = Vec2::new(40.0, 30.0);
+        sim.ball.holder = Some(cb);
+        sim.ball.position = sim.players[cb].position;
+        sim.ball.last_touch_team = Some(Team::Home);
+
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let directive = snapshot.tactical_directive(Team::Home);
+        let mut obs = snapshot.observation_for(cb);
+
+        // Opponent within ~5 yds in front (little forward space): no forward dribble.
+        obs.forward_dribble_space_yards = 3.0;
+        let blocked = sim.players[cb].possession_action_options(
+            &obs,
+            &directive,
+            0,
+            0,
+            false,
+            snapshot.dt_seconds,
+            snapshot.field_width,
+        );
+        let cf = blocked
+            .iter()
+            .find(|o| o.label == "carry-forward")
+            .expect("carry-forward option");
+        assert!(
+            !cf.legal,
+            "a centre-back must not dribble forward into a close opponent"
+        );
+
+        // With clear space ahead the same centre-back may carry forward.
+        obs.forward_dribble_space_yards = 9.0;
+        let clear = sim.players[cb].possession_action_options(
+            &obs,
+            &directive,
+            0,
+            0,
+            false,
+            snapshot.dt_seconds,
+            snapshot.field_width,
+        );
+        let cf_clear = clear
+            .iter()
+            .find(|o| o.label == "carry-forward")
+            .expect("carry-forward option");
+        assert!(
+            cf_clear.legal,
+            "with open space ahead the centre-back may carry forward"
+        );
+    }
+
+    #[test]
+    fn defenders_hold_the_line_off_their_own_goal_unless_the_ball_is_on_it() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 10,
+            ..Default::default()
+        });
+        let def_id = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Home && p.role == PlayerRole::Defender)
+            .map(|p| p.id)
+            .expect("a home defender");
+
+        // Ball well upfield -> the back line is pushed 8-10 yds off the goal line.
+        sim.ball.position = Vec2::new(40.0, 95.0);
+        let snap = WorldSnapshot::from_match(&sim);
+        let player = snap
+            .players
+            .iter()
+            .find(|p| p.id == def_id)
+            .cloned()
+            .unwrap();
+        let min_depth_upfield = snap.minimum_defensive_depth_from_own_goal(&player);
+        assert!(
+            min_depth_upfield >= PREFERRED_DEFENDER_DEPTH_YARDS - 0.01,
+            "defenders should sit 8-10 yds off their goal line when the ball is upfield: {min_depth_upfield}"
+        );
+
+        // Ball right on the goal line (behind them) -> they may drop in to defend it.
+        sim.ball.position = Vec2::new(40.0, 2.0);
+        let snap = WorldSnapshot::from_match(&sim);
+        let player = snap
+            .players
+            .iter()
+            .find(|p| p.id == def_id)
+            .cloned()
+            .unwrap();
+        let min_depth_on_line = snap.minimum_defensive_depth_from_own_goal(&player);
+        assert!(
+            min_depth_on_line < DEFENSIVE_GOAL_LINE_BUFFER_YARDS,
+            "with the ball on the goal line the defender may drop in: {min_depth_on_line}"
         );
     }
 
