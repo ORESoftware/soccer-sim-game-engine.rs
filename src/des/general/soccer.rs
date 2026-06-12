@@ -28738,10 +28738,13 @@ const PASS_CHAIN_SHOT_CONTINUATION_BONUS: f64 = 2.1;
 const PASS_CHAIN_PASS_CONTINUATION_BONUS: f64 = 1.6;
 
 fn pass_chain_link_reward(direction: PassDirectionBucket, depth: usize) -> f64 {
+    // A pass that leads to a subsequent received pass is rewarded — moreso for forward
+    // build-up — so progressive combination play is reinforced (on top of the 100-pt
+    // goal / 40-pt shot-on-target chains distributed back through the build-up).
     let base = match direction {
-        PassDirectionBucket::Forward => 2.40,
-        PassDirectionBucket::Lateral => 1.25,
-        PassDirectionBucket::Backward => 0.45,
+        PassDirectionBucket::Forward => 3.10,
+        PassDirectionBucket::Lateral => 1.55,
+        PassDirectionBucket::Backward => 0.55,
     };
     let depth_multiplier = match depth {
         0 => 1.0,
@@ -72013,6 +72016,28 @@ mod tests {
             Vec2::new(40.0, 90.0),
             length
         ));
+    }
+
+    #[test]
+    fn goal_and_shot_reward_pools_and_buildup_chain_are_locked() {
+        // 100 points for a goal, 40 for a shot on target, distributed back through the
+        // attacking chain (so an intermediate received pass that leads to a shot/goal
+        // earns a share).
+        assert_eq!(GOAL_REWARD_POINTS, 100.0);
+        assert_eq!(SHOT_ON_TARGET_REWARD_POINTS, 40.0);
+        assert!((GOAL_CHAIN_REWARD_PATTERN.iter().sum::<f64>() - 100.0).abs() < 1e-9);
+        assert!((SHOT_ON_TARGET_REWARD_PATTERN.iter().sum::<f64>() - 40.0).abs() < 1e-9);
+
+        // A pass that leads to a subsequent received pass is rewarded, more for forward
+        // build-up than sideways/back, and the immediate link more than a deeper one.
+        let fwd = pass_chain_link_reward(PassDirectionBucket::Forward, 0);
+        let lat = pass_chain_link_reward(PassDirectionBucket::Lateral, 0);
+        let back = pass_chain_link_reward(PassDirectionBucket::Backward, 0);
+        assert!(fwd > lat && lat > back && back > 0.0);
+        assert!(
+            pass_chain_link_reward(PassDirectionBucket::Forward, 0)
+                > pass_chain_link_reward(PassDirectionBucket::Forward, 1)
+        );
     }
 
     #[test]
