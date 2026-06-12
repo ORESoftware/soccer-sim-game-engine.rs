@@ -8110,6 +8110,9 @@ impl PlayerAgent {
         let crossing = ability01(self.skills.crossing_left.max(self.skills.crossing_right));
         let pressure = observation.perceived_pressure.clamp(0.0, 1.0);
         let pressure_urgency = observation.pressure_urgency.clamp(0.0, 1.0);
+        // In our own half, retention (shielding / safe dribbling) takes priority over
+        // risky attacking dribbling — keep the ball rather than forcing it forward.
+        let own_half = observation.yards_to_own_goal < observation.yards_to_goal;
         let offensive_urgency = observation.offensive_urgency.clamp(0.0, 1.0);
         let defensive_urgency = observation.defensive_urgency.clamp(0.0, 1.0);
         let decision_urgency = observation.decision_urgency.clamp(0.0, 1.0);
@@ -8276,7 +8279,10 @@ impl PlayerAgent {
                 + if goalmouth_carry_forced { 0.42 } else { 0.0 })
             * (1.0 + goal_attack * 0.30)
             * (1.0 - pressure * 0.24).clamp(0.70, 1.0)
-            * (1.0 - pressured_good_outlet * 0.44).clamp(0.50, 1.0))
+            * (1.0 - pressured_good_outlet * 0.44).clamp(0.50, 1.0)
+            // Own-half retention: risky forward dribbling is de-emphasised in our own
+            // half (more so when pressured) in favour of keeping the ball.
+            * if own_half { (1.0 - 0.24 - pressure * 0.18).clamp(0.55, 1.0) } else { 1.0 })
         .clamp(0.01, 1.46);
         let carry_out_legal = observation.forward_dribble_space_yards >= 0.8
             && !goal_attack_shot_required
@@ -8376,12 +8382,22 @@ impl PlayerAgent {
         // When truly blocked-and-pressured (a livelock duel) lift the ceiling so the
         // shield can outscore a now-suppressed forward dribble and the holder keeps
         // it rather than feeding the ping-pong; otherwise it stays at the old cap.
-        let protect_ball_ceiling = (0.88 + goal_side_shield * 0.34).clamp(0.88, 1.22);
+        // Just received the ball with a defender closing — shield with the body to
+        // secure it instead of knocking it in front of them to be stolen. Gated to
+        // genuine pressure so receiving in space still plays out normally.
+        let fresh_receipt_shield = (1.0 - observation.perceived_time_on_ball_seconds / 1.5)
+            .clamp(0.0, 1.0)
+            * pressure_urgency.max(pressure);
+        let own_half_retention = if own_half { 0.30 } else { 0.0 };
+        let protect_ball_ceiling =
+            (0.88 + goal_side_shield * 0.34 + own_half_retention).clamp(0.88, 1.40);
         let protect_ball_score = (dribble_score
             * (0.12
                 + pressure_urgency.max(pressure) * 0.76
                 + observation.immediate_dispossession_risk.clamp(0.0, 1.0) * 0.44
                 + goal_side_shield * 0.46
+                + fresh_receipt_shield * 0.55
+                + own_half_retention
                 + (1.0 - observation.perceived_time_on_ball_seconds / 2.8).clamp(0.0, 1.0) * 0.24))
             .clamp(0.01, protect_ball_ceiling);
         let side_step_legal =
@@ -71802,6 +71818,62 @@ mod tests {
         assert!(
             closed_penalty < open_penalty - 1.2,
             "closed/lateral interception should blame passer more: open={open_penalty} closed={closed_penalty}"
+        );
+    }
+
+    #[test]
+    fn fresh_receipt_under_pressure_prefers_shielding_in_own_half() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 12,
+            ..Default::default()
+        });
+        let holder = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Home && p.role == PlayerRole::Midfielder)
+            .map(|p| p.id)
+            .expect("a home midfielder");
+        sim.players[holder].position = Vec2::new(40.0, 35.0); // own half
+        sim.ball.holder = Some(holder);
+        sim.ball.position = sim.players[holder].position;
+        sim.ball.last_touch_team = Some(Team::Home);
+
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let directive = snapshot.tactical_directive(Team::Home);
+        let mut obs = snapshot.observation_for(holder);
+        // Just received the ball (low time on it) with a defender closing, in own half.
+        obs.perceived_time_on_ball_seconds = 0.2;
+        obs.perceived_pressure = 0.8;
+        obs.pressure_urgency = 0.8;
+        obs.immediate_dispossession_risk = 0.5;
+        obs.forward_dribble_space_yards = 2.0;
+        obs.yards_to_own_goal = 35.0;
+        obs.yards_to_goal = 85.0;
+
+        let opts = sim.players[holder].possession_action_options(
+            &obs,
+            &directive,
+            1,
+            0,
+            false,
+            snapshot.dt_seconds,
+            snapshot.field_width,
+        );
+        let protect = opts
+            .iter()
+            .find(|o| o.label == "protect-ball")
+            .expect("protect-ball option");
+        let carry_forward = opts
+            .iter()
+            .find(|o| o.label == "carry-forward")
+            .expect("carry-forward option");
+        assert!(protect.legal, "shielding should be legal under pressure");
+        assert!(
+            protect.score > carry_forward.score,
+            "freshly receiving under pressure in our own half should favour shielding over forcing it forward: protect={} carry={}",
+            protect.score,
+            carry_forward.score
         );
     }
 
