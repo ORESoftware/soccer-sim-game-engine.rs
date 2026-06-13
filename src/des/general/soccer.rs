@@ -492,6 +492,12 @@ const EXCESSIVE_HOLD_RISING_SHRINK_SECONDS: f64 = 1.4;
 // third, where taking a man on is worth the risk.
 const DRIBBLE_OPEN_PLAY_MIN_FORWARD_SPACE_YARDS: f64 = 1.8;
 const DRIBBLE_FINAL_THIRD_YARDS_TO_GOAL: f64 = 36.0;
+// "There's an open man — play it." When the learned policy proposes a dribble
+// but a teammate is this open with at least this expected completion, release
+// the ball to them rather than carrying on into traffic. Closes the hole where
+// the learned policy dribbles straight past an obviously open advanced outlet.
+const OPEN_OUTLET_RELEASE_OPENNESS: f64 = 0.55;
+const OPEN_OUTLET_RELEASE_COMPLETION: f64 = 0.62;
 // "Calm down and pass" damp on flashy evade moves (feint / side-step / swivel) when an
 // unpressured holder has a clean pass on. DAMP is the max fraction shaved off; FLOOR keeps
 // a legal evade from ever being fully zeroed (it can still fire if it's truly the best).
@@ -12139,6 +12145,32 @@ impl PlayerAgent {
             return None;
         }
 
+        // Open advanced outlet — pressure-independent. If a teammate is clearly
+        // open with a high-completion lane, move the ball to them instead of
+        // dribbling on: you do NOT carry into traffic when a man is open ahead.
+        // (The heuristic possession scorer already prefers this; the learned
+        // policy bypasses it, which is how the carrier ends up dribbling past an
+        // obviously open pass.) A genuinely-required shot still takes priority.
+        if observation.best_pass_receiver_openness >= OPEN_OUTLET_RELEASE_OPENNESS
+            && observation.expected_pass_completion >= OPEN_OUTLET_RELEASE_COMPLETION
+            && !goal_attack_shot_is_required(observation, self.role)
+        {
+            if let Some(target) = snapshot
+                .ranked_visible_pass_targets(self.id, 1)
+                .first()
+                .copied()
+            {
+                return Some((
+                    SoccerAction::Pass {
+                        target_player: Some(target),
+                        power: 0.58 + 0.30 * ability01(self.skills.passing_completion_rate),
+                        flight: PassFlight::Floor,
+                    },
+                    "pass1".to_string(),
+                ));
+            }
+        }
+
         let dribbling = ability01(self.skills.dribbling);
         let hold_pressure = observation
             .excessive_hold_pressure
@@ -12174,7 +12206,24 @@ impl PlayerAgent {
             ));
         }
 
-        if dribbling >= NON_ELITE_DRIBBLE_HOLD_SKILL_CUTOFF && hold_pressure < 0.64 {
+        // Forward room needed before "carry on" is even an option. Mirrors the
+        // heuristic carry-forward gate: relaxed inside the final third where
+        // taking a man on pays, stricter in open play where it just walks the
+        // ball into the tackle.
+        let carry_min_forward_space =
+            if observation.yards_to_goal <= DRIBBLE_FINAL_THIRD_YARDS_TO_GOAL {
+                1.2
+            } else {
+                DRIBBLE_OPEN_PLAY_MIN_FORWARD_SPACE_YARDS
+            };
+
+        // Even an elite dribbler is NOT exempt when boxed in: with no forward
+        // space ahead, carrying on simply walks the ball into the defender.
+        // Only exempt the elite when there is genuine room to attack.
+        if dribbling >= NON_ELITE_DRIBBLE_HOLD_SKILL_CUTOFF
+            && hold_pressure < 0.64
+            && observation.forward_dribble_space_yards >= carry_min_forward_space
+        {
             return None;
         }
 
@@ -12217,8 +12266,8 @@ impl PlayerAgent {
                 observation.expected_aerial_pass_completion >= 0.34
                     || observation.best_aerial_pass_receiver_openness >= 0.34
             });
-        aerial_target.map(|target| {
-            (
+        if let Some(target) = aerial_target {
+            return Some((
                 SoccerAction::Pass {
                     target_player: Some(target),
                     power: 0.62
@@ -12231,8 +12280,34 @@ impl PlayerAgent {
                     flight: PassFlight::Aerial,
                 },
                 "aerial-pass1".to_string(),
-            )
-        })
+            ));
+        }
+
+        // Pinned under real pressure, can't shoot, and no open teammate to pass
+        // to. Carrying on here just dribbles the ball into the defender (or
+        // forces a panic ball straight to an opponent). When there's no forward
+        // room left, shield the ball instead — turn the body between ball and
+        // defender to retain possession and buy time for support — rather than
+        // gifting it away.
+        if observation.forward_dribble_space_yards < carry_min_forward_space {
+            let kind = DribbleMoveKind::ProtectBall;
+            let touch = snapshot.deterministic_dribble_touch_decision_for(self.id, kind);
+            return Some((
+                SoccerAction::DribbleMove {
+                    target: snapshot.dribble_move_target_for_touch(
+                        self.id,
+                        self.home_position,
+                        kind,
+                        touch,
+                    ),
+                    kind,
+                    touch,
+                },
+                "protect-ball".to_string(),
+            ));
+        }
+
+        None
     }
 }
 
@@ -44787,6 +44862,11 @@ pub struct SoccerMatch {
     /// per-tick state frame.
     decision_trace_capture_enabled: bool,
     decision_trace_log: VecDeque<LiveDecisionTraceEntry>,
+    /// Ball holder captured at the START of the tick (before intents are
+    /// applied). The trace recorder runs after actions, so a pass/shot/clearance
+    /// has already cleared `ball.holder` to None — without this the releasing
+    /// player's just-made decision (the pass!) would never be captured.
+    decision_trace_holder_hint: Option<usize>,
 }
 
 /// A just-completed dispossession, retained only long enough to suppress an
@@ -45148,6 +45228,7 @@ impl SoccerMatch {
             possession_swaps: VecDeque::new(),
             decision_trace_capture_enabled: false,
             decision_trace_log: VecDeque::new(),
+            decision_trace_holder_hint: None,
         };
         let center = Vec2::new(
             config.field_width_yards * 0.5,
@@ -47628,10 +47709,24 @@ impl SoccerMatch {
         if !self.decision_trace_capture_enabled {
             return;
         }
-        let Some(holder_id) = self.ball.holder else {
-            return;
-        };
-        let Some(holder) = self.players.iter().find(|p| p.id == holder_id) else {
+        // Capture the on-ball decision made this tick. The recorder runs AFTER
+        // actions, so on a pass/shot/clearance tick the ball is already in flight
+        // (holder None) — that releasing player's just-made decision (the pass!)
+        // is exactly what we want, and its observation still has `has_ball`. Try
+        // the start-of-tick holder first, then the current holder, and take the
+        // first whose just-made decision was actually on-ball (so a steal/receive
+        // tick, where neither decided on-ball, records nothing rather than a
+        // misleading off-ball entry).
+        let Some(holder) = [self.decision_trace_holder_hint, self.ball.holder]
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.players.iter().find(|p| p.id == id))
+            .find(|p| {
+                p.last_decision
+                    .as_ref()
+                    .is_some_and(|d| d.observation.has_ball)
+            })
+        else {
             return;
         };
         let Some(decision) = holder.last_decision.as_ref() else {
@@ -47762,6 +47857,10 @@ impl SoccerMatch {
         pre_field_snapshot_elapsed += phase_started.elapsed();
         let ball_velocity_before = self.ball.velocity;
         let ball_acceleration_before = self.ball.acceleration;
+        // Remember who has the ball BEFORE intents run, so the decision-trace
+        // recorder (which runs after actions) can still attribute a pass/shot to
+        // the player who released it once `ball.holder` has gone to None.
+        self.decision_trace_holder_hint = self.ball.holder;
         pre_field_elapsed += pre_field_started.elapsed();
 
         let field_loop_started = Instant::now();
