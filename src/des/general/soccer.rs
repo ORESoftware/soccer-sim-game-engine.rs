@@ -1338,6 +1338,13 @@ const BALL_IN_BEHIND_MAX_FROM_GOAL_YARDS: f64 = 55.0;
 const IN_BEHIND_COVER_DISTANCE_YARDS: f64 = 6.0;
 const IN_BEHIND_SPRINT_PRESSURE: f64 = 0.45;
 const IN_BEHIND_GK_MAX_ADVANCE_YARDS: f64 = 16.0;
+/// Over-the-top run trigger: minimum cos-angle between the holder's facing and the
+/// direction to the runner for "eye contact" (≈ within 60°) — the holder is looking up
+/// at the runner before they commit to breaking the line.
+const OVER_THE_TOP_EYE_CONTACT_DOT: f64 = 0.50;
+/// Ranking nudge toward threading / lofting the ball to a teammate breaking in behind
+/// while a through-ball possession strategy is active (the runner's "call for it").
+const OVER_THE_TOP_PASS_BONUS: f64 = 2.4;
 // A pressured recovering defender may play it back to the keeper, but only a controllable
 // 8-40yd ball: shorter is pointless, longer risks an incomplete pass across our own area.
 const GK_BACKPASS_MIN_YARDS: f64 = 8.0;
@@ -25496,12 +25503,24 @@ impl WorldSnapshot {
                 // Relieved inside the final third where contested receptions are worth it.
                 let reception_congestion_penalty =
                     self.reception_congestion_penalty_at(me.team, pass_point);
+                // Under a through-ball possession strategy, answer a forward/mid breaking
+                // in behind: nudge the holder to thread / loft the ball over the top to a
+                // teammate already making the run (their call for the over-the-top ball).
+                let over_the_top_invite_bonus = if self.team_plays_through_ball(me.team)
+                    && matches!(p.role, PlayerRole::Forward | PlayerRole::Midfielder)
+                    && self.player_is_recent_forward_runner(p)
+                {
+                    OVER_THE_TOP_PASS_BONUS
+                } else {
+                    0.0
+                };
                 let score = score + low_cross_policy_bonus
                     - blind_backward_penalty
                     - lateral_penalty
                     - anticipation_penalty
                     - reception_teammate_penalty
                     - reception_congestion_penalty
+                    + over_the_top_invite_bonus
                     + own_box_play_out_adjustment
                     + forward_open_bonus
                     + wing_overload_bonus
@@ -25947,6 +25966,56 @@ impl WorldSnapshot {
         (-18.0..=28.0).contains(&progress_from_midfield)
     }
 
+    /// Possession-mode attacking strategies (set by the home/away brain) that look to
+    /// break the line with a ball in behind / over the top. When one is active, attacking
+    /// midfielders and strikers commit to sprinting runs to beat the offside trap and the
+    /// holder is nudged to thread / loft the ball through.
+    fn team_plays_through_ball(&self, team: Team) -> bool {
+        matches!(
+            self.tactical_directive(team).attack_strategy,
+            TeamAttackStrategy::QuickVerticalThroughBall
+                | TeamAttackStrategy::BaitOffsideThenThroughBall
+                | TeamAttackStrategy::DrawPressThenPlayThrough
+                | TeamAttackStrategy::DirectLongDiagonalLeft
+                | TeamAttackStrategy::DirectLongDiagonalRight
+                | TeamAttackStrategy::ThirdManRunCentral
+        )
+    }
+
+    /// The trigger for an over-the-top run: the ball-holder can realistically deliver it.
+    /// Commit when the holder is under only LOW-to-MEDIUM pressure (time to pick the pass)
+    /// OR there is a clear line of sight — "eye contact" — between holder and runner (the
+    /// holder can see them and is facing roughly toward them), so the ball can be threaded.
+    fn holder_can_release_over_the_top(&self, runner_id: usize) -> bool {
+        let Some(holder_id) = self.ball.holder else {
+            return false;
+        };
+        if holder_id == runner_id {
+            return false;
+        }
+        let Some(holder) = self.players.iter().find(|p| p.id == holder_id) else {
+            return false;
+        };
+        let Some(runner) = self.players.iter().find(|p| p.id == runner_id) else {
+            return false;
+        };
+        if holder.team != runner.team {
+            return false;
+        }
+        let holder_pos = self.player_snapshot_position(holder);
+        // Low-to-medium pressure: no opponent is right on top of the holder.
+        let low_to_medium_pressure =
+            self.attacker_pressure_on_point(holder.team, holder_pos) <= IN_BEHIND_SPRINT_PRESSURE;
+        // Eye contact: the holder can see the runner AND is facing roughly toward them.
+        let eye_contact = self.player_can_see_player(holder_id, runner_id)
+            && self.player_facing_direction(holder).is_some_and(|facing| {
+                let to_runner = self.player_snapshot_position(runner) - holder_pos;
+                to_runner.len() > 1e-3
+                    && facing.normalized().dot(to_runner.normalized()) >= OVER_THE_TOP_EYE_CONTACT_DOT
+            });
+        low_to_medium_pressure || eye_contact
+    }
+
     fn in_behind_run_target_for(&self, player_id: usize) -> Option<Vec2> {
         let me = self.players.iter().find(|p| p.id == player_id)?;
         if self.possession_team() != Some(me.team)
@@ -25956,14 +26025,21 @@ impl WorldSnapshot {
         {
             return None;
         }
+        // A through-ball possession strategy with the holder able to release (low-to-
+        // medium pressure OR eye contact) makes attacking mids/strikers commit to the run
+        // every tick — actively breaking the offside trap — from a wider staging band,
+        // rather than the occasional cadence used in neutral build-up.
+        let through_ball_invite =
+            self.team_plays_through_ball(me.team) && self.holder_can_release_over_the_top(player_id);
         let cadence = (self.tick + player_id as u64 * 17) % 41;
-        if cadence > 5 {
+        if cadence > 5 && !through_ball_invite {
             return None;
         }
         let current = self.player_snapshot_position(me);
         let line_y = self.second_last_defender_line_for(me.team)?;
         let staging_y = line_y - me.team.attack_dir() * 20.0;
-        if (current.y - staging_y).abs() > 14.0 {
+        let staging_tolerance = if through_ball_invite { 24.0 } else { 14.0 };
+        if (current.y - staging_y).abs() > staging_tolerance {
             return None;
         }
         let holder_position = self
@@ -111375,6 +111451,70 @@ tick,player_id,team,role,x,y,ball_x,ball_y,tracking_confidence,ball_confidence,p
             final_third_penalty < midfield_penalty * 0.34,
             "a contested reception in the final third is tolerated: \
              final={final_third_penalty} mid={midfield_penalty}"
+        );
+    }
+
+    #[test]
+    fn through_ball_strategy_fires_offside_breaking_runs_off_cadence() {
+        // Under a through-ball possession strategy with a calm holder, an attacker staged
+        // in front of the line commits to the run every tick (beating the offside trap),
+        // not just on the occasional neutral-build-up cadence.
+        let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+        let runner = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Home && p.role == PlayerRole::Forward)
+            .unwrap()
+            .id;
+        let holder = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Home && p.role == PlayerRole::Midfielder)
+            .unwrap()
+            .id;
+        // Calm holder at midfield with the ball; no opponents crowding it.
+        sim.ball.holder = Some(holder);
+        sim.players[holder].position = Vec2::new(40.0, sim.config.field_length_yards * 0.5);
+        sim.ball.position = sim.players[holder].position;
+        sim.ball.last_touch_team = Some(Team::Home);
+
+        // Stage the runner in the in-behind window, at the staging line read off the live
+        // defensive line. Pick a tick where the plain cadence gate is CLOSED for them.
+        let snap0 = WorldSnapshot::from_match(&sim);
+        let line_y = snap0.second_last_defender_line_for(Team::Home).unwrap();
+        let staging_y = line_y - Team::Home.attack_dir() * 20.0;
+        sim.players[runner].position = Vec2::new(40.0, staging_y);
+        for t in 0..41u64 {
+            if (t + runner as u64 * 17) % 41 > 5 {
+                sim.tick = t;
+                break;
+            }
+        }
+
+        // Without a through-ball strategy: the closed cadence blocks the run this tick.
+        sim.central_brain.home_directive.attack_strategy =
+            TeamAttackStrategy::PatientPossessionProbe;
+        let snap = WorldSnapshot::from_match(&sim);
+        assert!(
+            snap.in_behind_run_target_for(runner).is_none(),
+            "off-cadence with no through-ball strategy, the run should not fire yet"
+        );
+
+        // With the through-ball strategy + calm holder: the run fires regardless of cadence.
+        sim.central_brain.home_directive.attack_strategy =
+            TeamAttackStrategy::QuickVerticalThroughBall;
+        let snap = WorldSnapshot::from_match(&sim);
+        assert!(
+            snap.team_plays_through_ball(Team::Home),
+            "strategy gate should recognise the through-ball mode"
+        );
+        assert!(
+            snap.holder_can_release_over_the_top(runner),
+            "a calm, unpressured holder should be able to release the over-the-top ball"
+        );
+        assert!(
+            snap.in_behind_run_target_for(runner).is_some(),
+            "under the through-ball strategy the attacker should commit to the run off-cadence"
         );
     }
 
