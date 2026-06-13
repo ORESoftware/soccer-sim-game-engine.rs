@@ -46443,7 +46443,20 @@ pub struct SoccerMatch {
     pub tactical_summary: SoccerTacticalLearningSummary,
     pub learned_policy: Option<SoccerQPolicy>,
     pub team_policies: Option<SoccerTeamQPolicies>,
+    /// HOME-team value/critic learner — and, when `away_neural_learner` is `None`,
+    /// the *shared* learner for both teams (the historical single-net behavior).
     neural_learner: Option<SoccerNeuralLearner>,
+    /// Optional dedicated AWAY-team value/critic learner. `None` (default) means
+    /// the away team shares `neural_learner`, preserving the original shared-net
+    /// dynamics exactly. `Some` enables true **per-team neural brains** — each
+    /// team trains its own critic — which is what the tournament's bi-learning and
+    /// frozen-opponent modes require so two distinct brains can be compared.
+    away_neural_learner: Option<SoccerNeuralLearner>,
+    /// Per-team training freeze. A frozen team's learner still serves predictions
+    /// (so its brain plays) but receives no gradient updates — the frozen-opponent
+    /// evaluation pattern. Only meaningful alongside a dedicated per-team learner.
+    home_neural_frozen: bool,
+    away_neural_frozen: bool,
     /// How the trained value head couples into live action selection. `Off` by
     /// default, so play is unchanged unless a run opts in via `with_neural_blend`.
     neural_blend: SoccerNeuralBlendConfig,
@@ -46852,6 +46865,9 @@ impl SoccerMatch {
             } else {
                 None
             },
+            away_neural_learner: None,
+            home_neural_frozen: false,
+            away_neural_frozen: false,
             neural_blend: config.neural_blend,
             policy_head: None,
             world_model: None,
@@ -46992,15 +47008,115 @@ impl SoccerMatch {
         Ok(())
     }
 
-    /// Latest trained value/critic network snapshot, if a neural learner is
-    /// active and has produced at least one snapshot. This is the small (KB-scale)
-    /// artifact that is the *real* converging learner — the tabular Q-table is a
-    /// weak, fast-bloating prior. Persisted to a sidecar so warm-start restores
-    /// the net even when the tabular policy file exceeds the autoload byte cap.
+    /// Resolve the value/critic learner serving a given team. The away team falls
+    /// back to the shared `neural_learner` when it has no dedicated learner, so
+    /// single-net runs behave exactly as before.
+    fn neural_learner_for(&self, team: Team) -> Option<&SoccerNeuralLearner> {
+        match team {
+            Team::Home => self.neural_learner.as_ref(),
+            Team::Away => self
+                .away_neural_learner
+                .as_ref()
+                .or(self.neural_learner.as_ref()),
+        }
+    }
+
+    /// Mutable counterpart to [`neural_learner_for`]. Away resolves to its
+    /// dedicated learner when present, else the shared `neural_learner`.
+    fn neural_learner_for_mut(&mut self, team: Team) -> Option<&mut SoccerNeuralLearner> {
+        match team {
+            Team::Home => self.neural_learner.as_mut(),
+            Team::Away => {
+                if self.away_neural_learner.is_some() {
+                    self.away_neural_learner.as_mut()
+                } else {
+                    self.neural_learner.as_mut()
+                }
+            }
+        }
+    }
+
+    fn neural_team_frozen(&self, team: Team) -> bool {
+        match team {
+            Team::Home => self.home_neural_frozen,
+            Team::Away => self.away_neural_frozen,
+        }
+    }
+
+    /// Drop every neural brain (both teams) and clear freeze flags — used when
+    /// learning is toggled off or the backend changes at runtime.
+    fn clear_all_neural_learners(&mut self) {
+        self.neural_learner = None;
+        self.away_neural_learner = None;
+        self.home_neural_frozen = false;
+        self.away_neural_frozen = false;
+    }
+
+    /// True when this match runs distinct per-team neural brains (the away team
+    /// has its own learner) rather than one shared net.
+    pub fn has_per_team_neural_learners(&self) -> bool {
+        self.away_neural_learner.is_some()
+    }
+
+    /// Latest trained value/critic snapshot for the shared/home learner. This is
+    /// the small (KB-scale) artifact that is the *real* converging learner — the
+    /// tabular Q-table is a weak, fast-bloating prior. Persisted to a sidecar so
+    /// warm-start restores the net even when the tabular policy file exceeds the
+    /// autoload byte cap.
     pub fn neural_network_snapshot(&self) -> Option<SoccerNeuralNetworkSnapshot> {
-        self.neural_learner
-            .as_ref()
+        self.neural_network_snapshot_for(Team::Home)
+    }
+
+    /// Latest trained value/critic snapshot for a specific team's brain. Used by
+    /// the tournament to extract each competitor's learned net after a match.
+    pub fn neural_network_snapshot_for(&self, team: Team) -> Option<SoccerNeuralNetworkSnapshot> {
+        self.neural_learner_for(team)
             .and_then(|learner| learner.last_network_snapshot.clone())
+    }
+
+    /// Gradient steps a team's brain has taken — per-team learning progress for
+    /// tournament telemetry. A frozen team stays at its inherited step count.
+    pub fn neural_training_steps_for(&self, team: Team) -> usize {
+        self.neural_learner_for(team)
+            .map_or(0, |learner| learner.stats.training_steps)
+    }
+
+    /// Install a dedicated per-team neural brain from a snapshot, optionally
+    /// frozen (served for predictions but never trained). Installing the away
+    /// team's brain switches the match into per-team mode. A `None` snapshot
+    /// starts that team from a fresh (untrained) net so it can learn from scratch.
+    pub fn set_team_neural_brain(
+        &mut self,
+        team: Team,
+        snapshot: Option<SoccerNeuralNetworkSnapshot>,
+        frozen: bool,
+    ) -> Result<(), String> {
+        if !self.config.learning_enabled || !self.config.neural_learning.enabled {
+            // Neural learning disabled for this match: nothing to install.
+            match team {
+                Team::Home => self.neural_learner = None,
+                Team::Away => self.away_neural_learner = None,
+            }
+            return Ok(());
+        }
+        let learner = match snapshot {
+            Some(snapshot) => {
+                let network = build_soccer_neural_network_from_snapshot(&snapshot)?;
+                SoccerNeuralLearner::from_network(&self.config, network)
+            }
+            None => SoccerNeuralLearner::new(&self.config),
+        };
+        match team {
+            Team::Home => {
+                self.neural_learner = Some(learner);
+                self.home_neural_frozen = frozen;
+            }
+            Team::Away => {
+                self.away_neural_learner = Some(learner);
+                self.away_neural_frozen = frozen;
+            }
+        }
+        Ok(())
     }
 
     pub fn set_team_policies(&mut self, team_policies: SoccerTeamQPolicies) {
@@ -47131,11 +47247,15 @@ impl SoccerMatch {
         if !self.config.neural_learning.enabled || !self.config.neural_learning.lp_coupling_enabled {
             return None;
         }
-        let learner = self.neural_learner.as_ref()?;
         let target_scale = self.config.neural_learning.sanitized_target_scale();
         let mut signals = SoccerAdversarialEmbeddingSignals::default();
         let mut any = false;
         for team in [Team::Home, Team::Away] {
+            // Each team is scored by its own brain (away falls back to the shared
+            // net in single-net runs).
+            let Some(learner) = self.neural_learner_for(team) else {
+                continue;
+            };
             let Some(transition) = self
                 .episode_learning_transitions
                 .iter()
@@ -47290,6 +47410,9 @@ impl SoccerMatch {
 
     pub fn drain_neural_learning(&mut self, max_wait: Duration) {
         if let Some(learner) = &mut self.neural_learner {
+            learner.drain_results_until_idle(max_wait);
+        }
+        if let Some(learner) = &mut self.away_neural_learner {
             learner.drain_results_until_idle(max_wait);
         }
     }
@@ -47936,7 +48059,7 @@ impl SoccerMatch {
             self.config.learning_enabled = enabled;
             if !enabled {
                 self.config.neural_learning.enabled = false;
-                self.neural_learner = None;
+                self.clear_all_neural_learners();
             }
         }
         if let Some(enabled) = request.learning_logging_enabled {
@@ -47957,13 +48080,13 @@ impl SoccerMatch {
         if let Some(enabled) = request.neural_learning_enabled {
             self.config.neural_learning.enabled = enabled && self.config.learning_enabled;
             if !self.config.neural_learning.enabled {
-                self.neural_learner = None;
+                self.clear_all_neural_learners();
             }
         }
         if let Some(backend) = request.neural_learning_backend {
             if self.config.neural_learning.backend != backend {
                 self.config.neural_learning.backend = backend;
-                self.neural_learner = None;
+                self.clear_all_neural_learners();
             }
         }
         Ok(SoccerLearningRuntimeResponse {
@@ -48101,7 +48224,8 @@ impl SoccerMatch {
         if !value_active && !actor_active {
             return None;
         }
-        let learner = self.neural_learner.as_ref()?;
+        // Decisions are scored by the deciding player's own team brain.
+        let learner = self.neural_learner_for(team)?;
         if !learner.has_prediction_network() {
             return None;
         }
@@ -48214,20 +48338,23 @@ impl SoccerMatch {
         if self.neural_blend.mode == SoccerNeuralBlendMode::Off {
             return intent;
         }
-        let Some(learner) = self.neural_learner.as_ref() else {
-            return intent;
-        };
-        if !learner.has_prediction_network() {
-            return intent;
-        }
-        let readiness = self
-            .neural_blend
-            .readiness(learner.training_steps(), learner.average_loss());
-        if readiness <= 0.0 {
-            return intent;
-        }
         let target_scale = self.config.neural_learning.sanitized_target_scale();
         for team in [Team::Home, Team::Away] {
+            // Each team's forward-intent comes from its own brain (away falls back
+            // to the shared net in single-net runs), so per-team brains pull the
+            // whole-field LP shape independently.
+            let Some(learner) = self.neural_learner_for(team) else {
+                continue;
+            };
+            if !learner.has_prediction_network() {
+                continue;
+            }
+            let readiness = self
+                .neural_blend
+                .readiness(learner.training_steps(), learner.average_loss());
+            if readiness <= 0.0 {
+                continue;
+            }
             let mut advantage_sum = 0.0;
             let mut count = 0u32;
             for player in snapshot.players.iter().filter(|player| player.team == team) {
@@ -48416,7 +48543,7 @@ impl SoccerMatch {
 
     fn ensure_neural_learner(&mut self) {
         if !self.config.learning_enabled || !self.config.neural_learning.enabled {
-            self.neural_learner = None;
+            self.clear_all_neural_learners();
             return;
         }
         let backend = self.config.neural_learning.backend;
@@ -48426,6 +48553,15 @@ impl SoccerMatch {
             .map_or(true, |learner| learner.backend != backend);
         if needs_new {
             self.neural_learner = Some(SoccerNeuralLearner::new(&self.config));
+        }
+        // Refresh an existing dedicated away learner on a backend switch; never
+        // *create* one here — per-team mode is opt-in via `set_team_neural_brain`.
+        if self
+            .away_neural_learner
+            .as_ref()
+            .is_some_and(|learner| learner.backend != backend)
+        {
+            self.away_neural_learner = Some(SoccerNeuralLearner::new(&self.config));
         }
     }
 
@@ -48440,6 +48576,19 @@ impl SoccerMatch {
     fn neural_training_samples_for(
         &self,
         transitions: &[SoccerLearningTransition],
+    ) -> Vec<SoccerNeuralTrainingSample> {
+        self.neural_training_samples_filtered(transitions, None)
+    }
+
+    /// Build critic training samples. `team_filter` restricts which transitions
+    /// *emit* a sample (used to feed each team's own brain), while the zero-sum
+    /// opponent-centering is always computed across the **full** replay so the
+    /// reward shaping is identical whether one shared net or per-team brains are
+    /// trained.
+    fn neural_training_samples_filtered(
+        &self,
+        transitions: &[SoccerLearningTransition],
+        team_filter: Option<Team>,
     ) -> Vec<SoccerNeuralTrainingSample> {
         if transitions.is_empty() {
             return Vec::new();
@@ -48465,6 +48614,7 @@ impl SoccerMatch {
         }
         transitions
             .iter()
+            .filter(|transition| team_filter.map_or(true, |team| transition.team == team))
             .filter_map(|transition| {
                 let reward = finite_metric(transition.reward);
                 let adjusted_reward = if let Some((home_sum, home_count, away_sum, away_count)) =
@@ -48544,6 +48694,42 @@ impl SoccerMatch {
         }
     }
 
+    /// Route critic training to the right brain(s). Single-net runs (no dedicated
+    /// away learner) behave exactly as before: all transitions train the shared
+    /// net. Per-team runs train each team's own critic on its own transitions and
+    /// skip any team whose brain is frozen (frozen-opponent evaluation).
+    fn train_neural_value_models(&mut self, replay: &[SoccerLearningTransition]) {
+        if !self.config.neural_learning.enabled || replay.is_empty() {
+            return;
+        }
+        if self.away_neural_learner.is_none() {
+            let samples = self.neural_training_samples_filtered(replay, None);
+            self.train_neural_value_model(samples);
+            return;
+        }
+        // Per-team brains. Ensure learners exist / match the backend, then feed
+        // each non-frozen team its own samples. Clone the (small) neural config so
+        // the per-team learner field can be borrowed mutably alongside it.
+        self.ensure_neural_learner();
+        let neural_config = self.config.neural_learning.clone();
+        for team in [Team::Home, Team::Away] {
+            if self.neural_team_frozen(team) {
+                continue;
+            }
+            let samples = self.neural_training_samples_filtered(replay, Some(team));
+            if samples.is_empty() {
+                continue;
+            }
+            let learner = match team {
+                Team::Home => self.neural_learner.as_mut(),
+                Team::Away => self.away_neural_learner.as_mut(),
+            };
+            if let Some(learner) = learner {
+                learner.submit_samples(samples, &neural_config);
+            }
+        }
+    }
+
     /// Critic estimate (in target units) for a realized/candidate transition,
     /// or `None` when neural learning is off or no trained net exists yet. This
     /// is the runtime read path that lets the discrete Q layer and the
@@ -48552,7 +48738,9 @@ impl SoccerMatch {
         if !self.config.neural_learning.enabled {
             return None;
         }
-        let learner = self.neural_learner.as_ref()?;
+        // Score with the transition's own team brain (away falls back to the
+        // shared net in single-net runs).
+        let learner = self.neural_learner_for(transition.team)?;
         let features = soccer_neural_transition_features(transition);
         learner.predict_value(&features)
     }
@@ -48601,10 +48789,15 @@ impl SoccerMatch {
         &self,
         replay: &[SoccerLearningTransition],
     ) -> Vec<SoccerPolicySample> {
-        let Some(learner) = self.neural_learner.as_ref() else {
-            return Vec::new();
-        };
-        if !learner.has_prediction_network() || replay.is_empty() {
+        // The actor trains once at least one team brain can score states. Each
+        // transition is later valued by its own team's critic.
+        let home_ready = self
+            .neural_learner_for(Team::Home)
+            .map_or(false, |learner| learner.has_prediction_network());
+        let away_ready = self
+            .neural_learner_for(Team::Away)
+            .map_or(false, |learner| learner.has_prediction_network());
+        if (!home_ready && !away_ready) || replay.is_empty() {
             return Vec::new();
         }
         let target_scale = self.config.neural_learning.sanitized_target_scale();
@@ -48661,8 +48854,10 @@ impl SoccerMatch {
         let values: Vec<f64> = replay
             .iter()
             .map(|transition| {
-                learner
-                    .predict_value(&soccer_neural_transition_features(transition))
+                self.neural_learner_for(transition.team)
+                    .and_then(|learner| {
+                        learner.predict_value(&soccer_neural_transition_features(transition))
+                    })
                     .map(|value| value * target_scale)
                     .unwrap_or(0.0)
             })
@@ -48796,7 +48991,7 @@ impl SoccerMatch {
     /// decisions (e.g. score with each candidate action's channels instead).
     pub fn model_based_value(&self, transition: &SoccerLearningTransition) -> Option<f64> {
         let world_model = self.world_model.as_ref()?;
-        let learner = self.neural_learner.as_ref()?;
+        let learner = self.neural_learner_for(transition.team)?;
         let predicted_next = world_model
             .predict_next(&soccer_neural_transition_features(transition))?;
         let target_scale = self.config.neural_learning.sanitized_target_scale();
@@ -48821,11 +49016,6 @@ impl SoccerMatch {
             return;
         }
 
-        let neural_samples = if self.config.neural_learning.enabled {
-            self.neural_training_samples_for(&replay)
-        } else {
-            Vec::new()
-        };
         // Actor-critic baseline: score every replay transition with the current
         // critic so the discrete Q trainer can subtract it as a control variate.
         // Only computed when the coupling weight is non-zero (default off).
@@ -48868,7 +49058,7 @@ impl SoccerMatch {
         } else {
             Vec::new()
         };
-        self.train_neural_value_model(neural_samples);
+        self.train_neural_value_models(&replay);
         if !policy_samples.is_empty() {
             self.ensure_policy_head();
             if let Some(policy_head) = &mut self.policy_head {
@@ -49918,13 +50108,7 @@ impl SoccerMatch {
                             .collect::<Vec<_>>();
                         train_transitions.extend(deferred);
                     }
-                    let phase_started = Instant::now();
-                    let neural_samples = if self.neural_learning_due(learning_due) {
-                        self.neural_training_samples_for(&train_transitions)
-                    } else {
-                        Vec::new()
-                    };
-                    neural_sample_elapsed += phase_started.elapsed();
+                    let neural_due = self.neural_learning_due(learning_due);
                     if self.config.learning_enabled {
                         let phase_started = Instant::now();
                         if let Some(team_policies) = &mut self.team_policies {
@@ -49933,8 +50117,14 @@ impl SoccerMatch {
                         if let Some(policy) = &mut self.learned_policy {
                             policy.train(&train_transitions);
                         }
-                        self.train_neural_value_model(neural_samples);
                         policy_train_elapsed += phase_started.elapsed();
+                        if neural_due {
+                            // Routes to the shared net or to each team's own brain
+                            // (skipping frozen teams) depending on the match mode.
+                            let phase_started = Instant::now();
+                            self.train_neural_value_models(&train_transitions);
+                            neural_sample_elapsed += phase_started.elapsed();
+                        }
                     }
                 } else if capture_reward_transitions {
                     self.deferred_reward_transitions.extend(tick_transitions);
@@ -92774,6 +92964,76 @@ mod tests {
         assert!(learning.neural_learning_samples > 0);
         assert!(learning.neural_learning_parameter_count > 0);
         assert!(learning.neural_learning_last_loss.is_some());
+    }
+
+    fn per_team_brain_match(seed: u32) -> SoccerMatch {
+        SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.8,
+            max_human_players: 0,
+            neural_learning: SoccerNeuralLearningConfig {
+                enabled: true,
+                backend: SoccerNeuralLearningBackend::Inline,
+                train_every_ticks: 1,
+                batch_size: 8,
+                max_batches_per_tick: 2,
+                hidden_units: 8,
+                ..SoccerNeuralLearningConfig::default()
+            },
+            seed,
+            ..Default::default()
+        })
+        .with_team_policies(SoccerTeamQPolicies::new(SoccerQPolicyOptions::default()))
+    }
+
+    #[test]
+    fn per_team_neural_brains_train_both_sides_independently() {
+        let mut sim = per_team_brain_match(15071);
+        // Single-net to start: away resolves to the shared brain.
+        assert!(!sim.has_per_team_neural_learners());
+        // Install a dedicated, fresh away brain → per-team (bi-learning) mode.
+        sim.set_team_neural_brain(Team::Away, None, false)
+            .expect("install away brain");
+        assert!(sim.has_per_team_neural_learners());
+
+        for _ in 0..12 {
+            sim.run_time_step();
+        }
+
+        // Both brains accrue their own gradient steps, from their own transitions.
+        assert!(
+            sim.neural_training_steps_for(Team::Home) > 0,
+            "home brain should train"
+        );
+        assert!(
+            sim.neural_training_steps_for(Team::Away) > 0,
+            "away brain should train"
+        );
+        // Distinct learners: extracting each side yields a usable snapshot.
+        assert!(sim.neural_network_snapshot_for(Team::Home).is_some());
+        assert!(sim.neural_network_snapshot_for(Team::Away).is_some());
+    }
+
+    #[test]
+    fn frozen_away_brain_serves_predictions_but_never_trains() {
+        let mut sim = per_team_brain_match(20260);
+        // Freeze the away brain (frozen-opponent eval): it plays but never updates.
+        sim.set_team_neural_brain(Team::Away, None, true)
+            .expect("install frozen away brain");
+        assert!(sim.has_per_team_neural_learners());
+
+        for _ in 0..12 {
+            sim.run_time_step();
+        }
+
+        assert!(
+            sim.neural_training_steps_for(Team::Home) > 0,
+            "home brain should still learn"
+        );
+        assert_eq!(
+            sim.neural_training_steps_for(Team::Away),
+            0,
+            "frozen away brain must not take gradient steps"
+        );
     }
 
     #[test]
