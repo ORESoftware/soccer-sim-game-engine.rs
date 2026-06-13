@@ -616,6 +616,13 @@ const FORWARD_OPEN_PASS_BONUS_PER_YARD: f64 = 0.075;
 /// Pass-score bonus for a receiver on a flank where we have a numerical overload — pull
 /// the ball to the overloaded wing instead of bypassing it with a long ball.
 const WING_OVERLOAD_PASS_BONUS: f64 = 2.6;
+/// Max points shaved from a pass target whose reception point is fully crowded by
+/// opponents (a marked receiver / a defender converging to pressure them the instant
+/// they take it). Comparable to the blind-backward penalty so a congested receiver is
+/// strongly demoted relative to an open one, without vetoing it outright. Relieved to
+/// ~0 inside the final third, where a contested reception in a dangerous area is worth
+/// the risk.
+const RECEPTION_CONGESTION_PENALTY: f64 = 3.0;
 // Weight of the optimal-pass-length tiebreaker (peaks in the 8-12yd sweet spot).
 const PASS_LENGTH_PREFERENCE_WEIGHT: f64 = 0.5;
 const PASS_LENGTH_OPTIMAL_MIN_YARDS: f64 = 8.0;
@@ -25451,11 +25458,17 @@ impl WorldSnapshot {
                 } else {
                     0.0
                 };
+                // Don't feed a marked man: opponents crowding (or converging on) the
+                // reception point will pressure the receiver the instant they take it.
+                // Relieved inside the final third where contested receptions are worth it.
+                let reception_congestion_penalty =
+                    self.reception_congestion_penalty_at(me.team, pass_point);
                 let score = score + low_cross_policy_bonus
                     - blind_backward_penalty
                     - lateral_penalty
                     - anticipation_penalty
                     - reception_teammate_penalty
+                    - reception_congestion_penalty
                     + own_box_play_out_adjustment
                     + forward_open_bonus
                     + wing_overload_bonus
@@ -26575,6 +26588,25 @@ impl WorldSnapshot {
     /// nearest opponent's location, velocity AND acceleration toward it (mirrors
     /// `granular_pressure_signal`, but evaluated at an arbitrary point such as a recovery
     /// spot rather than at the actor). Used to pace the in-behind recovery run/sprint.
+    /// Penalty for playing a pass into a crowd: opponents tight to (or converging on)
+    /// the reception point will pressure or dispossess the receiver the instant they
+    /// take the ball. Full weight outside the final third; ramps to ~0 near the
+    /// opponent goal, where a contested reception in a dangerous area is worth the risk.
+    fn reception_congestion_penalty_at(&self, team: Team, pass_point: Vec2) -> f64 {
+        let opponent_pressure = self.attacker_pressure_on_point(team, pass_point);
+        let yards_to_goal = if team.attack_dir() > 0.0 {
+            self.field_length - pass_point.y
+        } else {
+            pass_point.y
+        };
+        // No penalty inside the final third (<=36yd to goal): contested receptions in
+        // dangerous areas are worth the risk. Ramps up to full weight by ~48yd out, so
+        // it bites in midfield / our own half but never suppresses a final-third ball.
+        let final_third_relief =
+            ((yards_to_goal - DRIBBLE_FINAL_THIRD_YARDS_TO_GOAL) / 12.0).clamp(0.0, 1.0);
+        opponent_pressure * RECEPTION_CONGESTION_PENALTY * final_third_relief
+    }
+
     fn attacker_pressure_on_point(&self, defending_team: Team, point: Vec2) -> f64 {
         let mut best = 0.0_f64;
         for opponent in self.players.iter().filter(|p| {
@@ -111255,6 +111287,44 @@ tick,player_id,team,role,x,y,ball_x,ball_y,tracking_confidence,ball_confidence,p
         assert!(
             !sim.carrier_shields_ball_from_defender(carrier, defender),
             "a defender within a yard of the ball is not shielded out"
+        );
+    }
+
+    #[test]
+    fn passing_into_a_crowd_is_penalised_except_in_the_final_third() {
+        // A reception point tightly marked by an opponent must be penalised when it is
+        // out in midfield, but tolerated in the final third (a contested chance near
+        // goal is worth the risk).
+        let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+        let marker = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Away && p.role != PlayerRole::Goalkeeper)
+            .unwrap()
+            .id;
+        park_players_except(&mut sim, &[marker]);
+        let fl = sim.config.field_length_yards;
+
+        // Midfield reception point (~60yd from Home's attacking goal), opponent on top.
+        let midfield = Vec2::new(40.0, fl - 60.0);
+        sim.players[marker].position = midfield + Vec2::new(1.2, 0.0);
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let midfield_penalty = snapshot.reception_congestion_penalty_at(Team::Home, midfield);
+        assert!(
+            midfield_penalty > 1.0,
+            "a tightly-marked midfield reception must be penalised, got {midfield_penalty}"
+        );
+
+        // Same crowding right in front of goal: final-third relief drops it to ~0.
+        let near_goal = Vec2::new(40.0, fl - 3.0);
+        sim.players[marker].position = near_goal + Vec2::new(1.2, 0.0);
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let final_third_penalty =
+            snapshot.reception_congestion_penalty_at(Team::Home, near_goal);
+        assert!(
+            final_third_penalty < midfield_penalty * 0.34,
+            "a contested reception in the final third is tolerated: \
+             final={final_third_penalty} mid={midfield_penalty}"
         );
     }
 
