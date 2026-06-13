@@ -12174,7 +12174,24 @@ impl PlayerAgent {
             ));
         }
 
-        if dribbling >= NON_ELITE_DRIBBLE_HOLD_SKILL_CUTOFF && hold_pressure < 0.64 {
+        // Forward room needed before "carry on" is even an option. Mirrors the
+        // heuristic carry-forward gate: relaxed inside the final third where
+        // taking a man on pays, stricter in open play where it just walks the
+        // ball into the tackle.
+        let carry_min_forward_space =
+            if observation.yards_to_goal <= DRIBBLE_FINAL_THIRD_YARDS_TO_GOAL {
+                1.2
+            } else {
+                DRIBBLE_OPEN_PLAY_MIN_FORWARD_SPACE_YARDS
+            };
+
+        // Even an elite dribbler is NOT exempt when boxed in: with no forward
+        // space ahead, carrying on simply walks the ball into the defender.
+        // Only exempt the elite when there is genuine room to attack.
+        if dribbling >= NON_ELITE_DRIBBLE_HOLD_SKILL_CUTOFF
+            && hold_pressure < 0.64
+            && observation.forward_dribble_space_yards >= carry_min_forward_space
+        {
             return None;
         }
 
@@ -12217,8 +12234,8 @@ impl PlayerAgent {
                 observation.expected_aerial_pass_completion >= 0.34
                     || observation.best_aerial_pass_receiver_openness >= 0.34
             });
-        aerial_target.map(|target| {
-            (
+        if let Some(target) = aerial_target {
+            return Some((
                 SoccerAction::Pass {
                     target_player: Some(target),
                     power: 0.62
@@ -12231,8 +12248,34 @@ impl PlayerAgent {
                     flight: PassFlight::Aerial,
                 },
                 "aerial-pass1".to_string(),
-            )
-        })
+            ));
+        }
+
+        // Pinned under real pressure, can't shoot, and no open teammate to pass
+        // to. Carrying on here just dribbles the ball into the defender (or
+        // forces a panic ball straight to an opponent). When there's no forward
+        // room left, shield the ball instead — turn the body between ball and
+        // defender to retain possession and buy time for support — rather than
+        // gifting it away.
+        if observation.forward_dribble_space_yards < carry_min_forward_space {
+            let kind = DribbleMoveKind::ProtectBall;
+            let touch = snapshot.deterministic_dribble_touch_decision_for(self.id, kind);
+            return Some((
+                SoccerAction::DribbleMove {
+                    target: snapshot.dribble_move_target_for_touch(
+                        self.id,
+                        self.home_position,
+                        kind,
+                        touch,
+                    ),
+                    kind,
+                    touch,
+                },
+                "protect-ball".to_string(),
+            ));
+        }
+
+        None
     }
 }
 
