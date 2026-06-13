@@ -1306,6 +1306,26 @@ const LOOSE_BALL_PEEL_LATERAL_YARDS: f64 = 7.0;
 // it back rather than jogging. Only the chase gait changes — still a soft cue.
 const LOOSE_BALL_PRESSURED_SPRINT_MIN_DISTANCE_YARDS: f64 = 2.0;
 const LOOSE_BALL_PRESSURED_SPRINT_OPPONENT_RADIUS_YARDS: f64 = 10.0;
+// Ball played IN BEHIND the back line (a through-ball goalside of our 2nd-to-last defender):
+// the back line must turn and recover. Counts as "in behind" once the ball is this far past
+// the 2nd-to-last defender, and only while it is within _MAX_FROM_GOAL of our own goal (a ball
+// behind a high line up the pitch is not a recovery emergency). The two nearest defenders + the
+// keeper strive goalside; the 2nd man covers this far goalside of the ball; the keeper may
+// sweep up to _GK_MAX_ADVANCE off its line. Pace (run vs sprint) follows the granular pressure
+// from the chasing attacker (>= _SPRINT_PRESSURE → sprint).
+const BALL_IN_BEHIND_MARGIN_YARDS: f64 = 2.0;
+const BALL_IN_BEHIND_MAX_FROM_GOAL_YARDS: f64 = 55.0;
+const IN_BEHIND_COVER_DISTANCE_YARDS: f64 = 6.0;
+const IN_BEHIND_SPRINT_PRESSURE: f64 = 0.45;
+const IN_BEHIND_GK_MAX_ADVANCE_YARDS: f64 = 16.0;
+// A pressured recovering defender may play it back to the keeper, but only a controllable
+// 8-40yd ball: shorter is pointless, longer risks an incomplete pass across our own area.
+const GK_BACKPASS_MIN_YARDS: f64 = 8.0;
+const GK_BACKPASS_MAX_YARDS: f64 = 40.0;
+// Reward weight for a pressured recovering defender's controllable back-pass to a more-open
+// keeper, scaled by keeper openness and the pressure on the passer (offsets the backward-pass
+// penalty so it's a real outlet only when genuinely warranted).
+const GK_BACKPASS_OUTLET_BONUS: f64 = 3.2;
 // General teammate padding (3yd outside the box, 2yd inside) is a SOFT, breakable barrier
 // handled by the teammate-spacing clock system above. Layered on top, this is the one HARD
 // rule: when a team-mate is dribbling UNDER NO PRESSURE, no other teammate may run at them and
@@ -25301,6 +25321,29 @@ impl WorldSnapshot {
                 // the nearer teammate, since the farther one is a longer ball down the same line.
                 let pass_length_bonus =
                     pass_length_preference(dist) * PASS_LENGTH_PREFERENCE_WEIGHT;
+                // Pressured outlet to the keeper: a defender being closed down may play it
+                // back to the keeper IF the keeper is the MORE OPEN option and a controllable
+                // 8-40yd away (shorter is pointless; longer risks a giveaway across our own
+                // area). Scaled by keeper openness and the pressure on the passer; offsets the
+                // backward-pass penalty only when genuinely warranted.
+                let keeper_outlet_bonus = if p.role == PlayerRole::Goalkeeper
+                    && (GK_BACKPASS_MIN_YARDS..=GK_BACKPASS_MAX_YARDS).contains(&dist)
+                {
+                    let passer_pressure = self.attacker_pressure_on_point(me.team, me_position);
+                    let keeper_open = pass_quality.receiver_openness.clamp(0.0, 1.0);
+                    let passer_open =
+                        pass_receiver_openness_for_snapshots(&self.players, me.team, me_position)
+                            .clamp(0.0, 1.0);
+                    if passer_pressure >= IN_BEHIND_SPRINT_PRESSURE
+                        && keeper_open > passer_open + 0.10
+                    {
+                        GK_BACKPASS_OUTLET_BONUS * keeper_open * passer_pressure
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
                 let score = score + low_cross_policy_bonus
                     - blind_backward_penalty
                     - lateral_penalty
@@ -25308,6 +25351,7 @@ impl WorldSnapshot {
                     + own_box_play_out_adjustment
                     + forward_open_bonus
                     + pass_length_bonus
+                    + keeper_outlet_bonus
                     - backheel_penalty;
                 (p.id, score)
             })
@@ -26334,6 +26378,167 @@ impl WorldSnapshot {
             return target;
         }
         line_target
+    }
+
+    /// If the ball has been played IN BEHIND `team`'s back line — goalside of its
+    /// 2nd-to-last defender, within recovery range of its own goal, and NOT in this team's
+    /// possession — returns the point to recover (the ball's projected landing/roll). This
+    /// is the dangerous through-ball the back line must turn and sprint to cover.
+    fn ball_played_in_behind_for(&self, team: Team) -> Option<Vec2> {
+        if self.possession_team() == Some(team) || self.ball.holder.is_some() {
+            // Only a loose / in-flight ball is a "recover it" emergency; if an attacker has
+            // already settled it, that is a contain problem handled elsewhere.
+            if self.ball.holder.is_some_and(|h| {
+                self.players
+                    .iter()
+                    .find(|p| p.id == h)
+                    .is_some_and(|p| p.team == team)
+            }) {
+                return None;
+            }
+            if self.possession_team() == Some(team) {
+                return None;
+            }
+        }
+        let line_y = self.second_last_defender_line_for(team.other())?;
+        let attack_dir = team.attack_dir();
+        let ball_fwd = self.ball.position.y * attack_dir;
+        let line_fwd = line_y * attack_dir;
+        // In behind = ball is goalside of (deeper than) our 2nd-to-last defender, by a margin.
+        if ball_fwd >= line_fwd - BALL_IN_BEHIND_MARGIN_YARDS {
+            return None;
+        }
+        let own_goal_fwd = self.own_goal_y_for(team) * attack_dir;
+        if ball_fwd - own_goal_fwd > BALL_IN_BEHIND_MAX_FROM_GOAL_YARDS {
+            return None;
+        }
+        Some(
+            self.projected_loose_ball_target()
+                .unwrap_or(self.ball.position),
+        )
+    }
+
+    /// Granular pressure in [0, 1] the attacking team is putting ON a point — built from the
+    /// nearest opponent's location, velocity AND acceleration toward it (mirrors
+    /// `granular_pressure_signal`, but evaluated at an arbitrary point such as a recovery
+    /// spot rather than at the actor). Used to pace the in-behind recovery run/sprint.
+    fn attacker_pressure_on_point(&self, defending_team: Team, point: Vec2) -> f64 {
+        let mut best = 0.0_f64;
+        for opponent in self.players.iter().filter(|p| {
+            p.team != defending_team && p.role != PlayerRole::Goalkeeper
+        }) {
+            let pos = self.player_snapshot_position(opponent);
+            let dist = pos.distance(point);
+            let to_point = point - pos;
+            if to_point.len() <= 1e-3 {
+                best = best.max(1.0);
+                continue;
+            }
+            let axis = to_point.normalized();
+            let proximity = pressure_from_nearest_distance(dist);
+            let engage = (1.0 - dist / PRESSURE_RISING_ENGAGE_YARDS).clamp(0.0, 1.0);
+            let closing =
+                (opponent.velocity.dot(axis) / PRESSURE_RISING_REF_CLOSING_YPS).clamp(0.0, 1.0);
+            let accel = (opponent.acceleration.dot(axis) / GRANULAR_PRESSURE_REF_ACCEL_YPS2)
+                .clamp(-1.0, 1.0);
+            let pressure =
+                (proximity + engage * (closing * 0.45 + accel * 0.20)).clamp(0.0, 1.0);
+            best = best.max(pressure);
+        }
+        return best;
+    }
+
+    /// Ball-in-behind recovery target + pace for an off-ball DEFENDING player. When a ball is
+    /// played in behind our back line, the nearest outfield defender SPRINTS onto it to
+    /// recover; the 2nd-nearest sprints/runs goalside to cover between the ball and our goal;
+    /// the keeper sweeps off its line toward the ball. At least three (keeper + two) strive
+    /// goalside. Run-vs-sprint pace follows the granular pressure of the chasing attacker.
+    /// Returns `(adjusted_target, sprint)`, or the input target with `false` when it doesn't apply.
+    fn ball_in_behind_recovery_adjusted_target(&self, player_id: usize, target: Vec2) -> (Vec2, bool) {
+        let Some(me) = self.players.iter().find(|p| p.id == player_id) else {
+            return (target, false);
+        };
+        if me.controller_slot.is_some() || self.ball.holder == Some(player_id) {
+            return (target, false);
+        }
+        let Some(recovery) = self.ball_played_in_behind_for(me.team) else {
+            return (target, false);
+        };
+        let attack_dir = me.team.attack_dir();
+        let own_goal = Vec2::new(self.field_width * 0.5, self.own_goal_y_for(me.team));
+        let pressure = self.attacker_pressure_on_point(me.team, recovery);
+        let pressured_sprint = pressure >= IN_BEHIND_SPRINT_PRESSURE;
+
+        if me.role == PlayerRole::Goalkeeper {
+            // Sweeper-keeper: advance off the line toward the recovery point, capped so it
+            // never charges out of the area. Sprint if the attacker is bearing down.
+            let line_target = self.goalkeeper_ball_goal_tracking_target(me.team);
+            let toward = recovery - line_target;
+            let advance = toward.len().min(IN_BEHIND_GK_MAX_ADVANCE_YARDS);
+            let gk_target = if toward.len() > 1e-3 {
+                line_target + toward.normalized() * advance
+            } else {
+                line_target
+            };
+            return (
+                gk_target.clamp_to_pitch(self.field_width, self.field_length),
+                pressured_sprint,
+            );
+        }
+        if me.role != PlayerRole::Defender {
+            return (target, false);
+        }
+        // Rank our outfield defenders by distance to the recovery point (stable tie-break).
+        let mut defenders: Vec<(usize, f64)> = self
+            .players
+            .iter()
+            .filter(|p| p.team == me.team && p.role == PlayerRole::Defender)
+            .map(|p| (p.id, self.player_snapshot_position(p).distance(recovery)))
+            .collect();
+        defenders.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        let Some(rank) = defenders.iter().position(|(id, _)| *id == player_id) else {
+            return (target, false);
+        };
+        if rank == 0 {
+            // Nearest defender to the trajectory: SPRINT onto the ball to recover it.
+            return (
+                recovery.clamp_to_pitch(self.field_width, self.field_length),
+                true,
+            );
+        }
+        if rank == 1 {
+            // Second man: drop GOALSIDE of the ball to cover the route to goal.
+            let to_goal = own_goal - recovery;
+            let dir = if to_goal.len() > 1e-3 {
+                to_goal.normalized()
+            } else {
+                Vec2::new(0.0, -attack_dir)
+            };
+            let cover = recovery + dir * IN_BEHIND_COVER_DISTANCE_YARDS;
+            return (
+                cover.clamp_to_pitch(self.field_width, self.field_length),
+                pressured_sprint,
+            );
+        }
+        (target, false)
+    }
+
+    /// Applies [`Self::ball_in_behind_recovery_adjusted_target`] to a decided off-ball move,
+    /// setting the sprint pace it returns.
+    fn ball_in_behind_recovery_adjusted_intent(&self, mut intent: PlayerIntent) -> PlayerIntent {
+        if let SoccerAction::MoveTo(target) = intent.action {
+            let (adjusted, sprint) =
+                self.ball_in_behind_recovery_adjusted_target(intent.player_id, target);
+            if adjusted != target {
+                intent.action = SoccerAction::MoveTo(adjusted);
+                intent.sprint = intent.sprint || sprint;
+            }
+        }
+        return intent;
     }
 
     /// True if a point lies inside either 18-yard penalty area: within 18 yards of
@@ -48732,6 +48937,11 @@ impl SoccerMatch {
                     // Relational shape: nudge an off-ball mover toward its ideal offsets
                     // to its formation neighbours so the team covers ground as a unit.
                     let intent = self.relational_shape_disciplined_intent(intent);
+                    // Ball played IN BEHIND our back line: this has FINAL say over shape — the
+                    // keeper sweeps and the two nearest defenders sprint/run goalside to recover
+                    // (paced by the chasing attacker's granular pressure). Everyone else keeps
+                    // the shape the chain just gave them.
+                    let intent = snapshot.ball_in_behind_recovery_adjusted_intent(intent);
                     let player_decision_elapsed = phase_started.elapsed();
                     field_player_decision_elapsed += player_decision_elapsed;
                     match decision_context {
@@ -78507,6 +78717,102 @@ mod tests {
         assert!(pass_length_preference(25.0) < 1.0);
         // The optimal window beats a longer ball on the same lane (favours the nearer teammate).
         assert!(pass_length_preference(10.0) > pass_length_preference(20.0));
+    }
+
+    #[test]
+    fn ball_in_behind_back_line_triggers_keeper_and_two_defender_recovery() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 47,
+            ..Default::default()
+        });
+        let gk = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Home && p.role == PlayerRole::Goalkeeper)
+            .map(|p| p.id)
+            .unwrap();
+        let home_def: Vec<usize> = sim
+            .players
+            .iter()
+            .filter(|p| p.team == Team::Home && p.role == PlayerRole::Defender)
+            .map(|p| p.id)
+            .collect();
+        assert!(home_def.len() >= 4, "need a back four");
+        let attacker = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Away && p.role != PlayerRole::Goalkeeper)
+            .map(|p| p.id)
+            .unwrap();
+        // Push every Home outfield player well upfield so the back line is unambiguous, then
+        // lay out the back four; Home defends the y=0 goal.
+        for p in &mut sim.players {
+            if p.team == Team::Home && p.role != PlayerRole::Goalkeeper {
+                p.position = Vec2::new(p.position.x.clamp(8.0, 72.0), 50.0);
+                p.velocity = Vec2::zero();
+            }
+        }
+        for (i, &d) in home_def.iter().take(4).enumerate() {
+            sim.players[d].position = Vec2::new(28.0 + i as f64 * 8.0, 34.0 + i as f64 * 4.0);
+        }
+        sim.players[gk].position = Vec2::new(40.0, 3.0);
+        // A through-ball in behind: loose, rolling toward the Home goal, well past the line.
+        sim.ball.holder = None;
+        sim.ball.position = Vec2::new(40.0, 16.0);
+        sim.ball.velocity = Vec2::new(0.0, -6.0);
+        sim.ball.altitude_yards = 0.0;
+        sim.ball.last_touch_team = Some(Team::Away);
+        // An attacker bearing down on it (pressure → sprint).
+        sim.players[attacker].position = Vec2::new(42.0, 23.0);
+        sim.players[attacker].velocity = Vec2::new(0.0, -7.0);
+        sim.players[attacker].acceleration = Vec2::new(0.0, -3.0);
+
+        let snap = WorldSnapshot::from_match(&sim);
+        let recovery = snap
+            .ball_played_in_behind_for(Team::Home)
+            .expect("ball is in behind Home's back line");
+
+        let mut by_dist: Vec<(usize, f64)> = home_def
+            .iter()
+            .take(4)
+            .map(|&d| (d, sim.players[d].position.distance(recovery)))
+            .collect();
+        by_dist.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let (nearest, second, far) = (by_dist[0].0, by_dist[1].0, by_dist[3].0);
+
+        let (t_near, sprint_near) =
+            snap.ball_in_behind_recovery_adjusted_target(nearest, sim.players[nearest].position);
+        assert!(
+            t_near.distance(recovery) < 0.5,
+            "nearest defender sprints onto the ball to recover it: {t_near:?} rec={recovery:?}"
+        );
+        assert!(sprint_near, "nearest defender sprints");
+
+        let (t_second, _) =
+            snap.ball_in_behind_recovery_adjusted_target(second, sim.players[second].position);
+        assert!(
+            t_second.y < recovery.y,
+            "second defender covers GOALSIDE of the ball (toward y=0): {t_second:?} rec={recovery:?}"
+        );
+
+        let (t_gk, _) = snap.ball_in_behind_recovery_adjusted_target(gk, sim.players[gk].position);
+        assert!(
+            t_gk.y > sim.players[gk].position.y + 1.0,
+            "keeper sweeps off its line toward the ball: {t_gk:?}"
+        );
+
+        let (t_far, _) =
+            snap.ball_in_behind_recovery_adjusted_target(far, sim.players[far].position);
+        assert_eq!(
+            t_far, sim.players[far].position,
+            "the 3rd/4th defenders hold their shape (only GK + 2 recover)"
+        );
+
+        // Not triggered when WE have the ball.
+        sim.ball.holder = Some(home_def[0]);
+        let snap_held = WorldSnapshot::from_match(&sim);
+        assert!(snap_held.ball_played_in_behind_for(Team::Home).is_none());
     }
 
     #[test]
