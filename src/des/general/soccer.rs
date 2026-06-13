@@ -21555,6 +21555,19 @@ pub struct TeammateSpacingNotice {
 #[serde(rename_all = "camelCase")]
 pub struct WorldSnapshot {
     pub tick: u64,
+    // Per-tick memo of pass-target rankings. A snapshot is one immutable world state, so
+    // a ranking computed once stays valid for its whole lifetime; this collapses the many
+    // identical ranked_*_pass_targets calls a single decision makes (visible variant alone
+    // is called ~57x) into one O(teammates x players) computation. Keyed by the filter
+    // flags; the FULL sorted list is cached and each caller takes its own prefix, so the
+    // result is byte-identical to the uncached path. RefCell for &self interior mutability;
+    // skipped by serde (rebuilt lazily; Default = empty).
+    #[serde(skip)]
+    ranked_floor_pass_cache:
+        std::cell::RefCell<std::collections::HashMap<(usize, bool, bool), Vec<usize>>>,
+    #[serde(skip)]
+    ranked_aerial_pass_cache:
+        std::cell::RefCell<std::collections::HashMap<(usize, bool), Vec<usize>>>,
     pub clock_seconds: f64,
     pub dt_seconds: f64,
     pub field_length: f64,
@@ -22149,6 +22162,8 @@ impl WorldSnapshot {
 
         WorldSnapshot {
             tick: m.tick,
+            ranked_floor_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+            ranked_aerial_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
             clock_seconds: m.clock_seconds,
             dt_seconds: m.config.dt_seconds,
             field_length: m.config.field_length_yards,
@@ -25169,6 +25184,24 @@ impl WorldSnapshot {
         visible_only: bool,
         require_reception_won: bool,
     ) -> Vec<usize> {
+        // Exact per-tick memo: the heavy scoring is independent of `limit` (only the final
+        // prefix differs), so cache the full sorted list per (player, flags) and slice it.
+        let key = (player_id, visible_only, require_reception_won);
+        if let Some(cached) = self.ranked_floor_pass_cache.borrow().get(&key) {
+            return cached.iter().take(limit).copied().collect();
+        }
+        let full = self.ranked_pass_targets_filtered_full(player_id, visible_only, require_reception_won);
+        let result: Vec<usize> = full.iter().take(limit).copied().collect();
+        self.ranked_floor_pass_cache.borrow_mut().insert(key, full);
+        result
+    }
+
+    fn ranked_pass_targets_filtered_full(
+        &self,
+        player_id: usize,
+        visible_only: bool,
+        require_reception_won: bool,
+    ) -> Vec<usize> {
         let Some(me) = self.players.iter().find(|p| p.id == player_id) else {
             return Vec::new();
         };
@@ -25479,13 +25512,28 @@ impl WorldSnapshot {
             })
             .collect::<Vec<_>>();
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        ranked.into_iter().take(limit).map(|(id, _)| id).collect()
+        ranked.into_iter().map(|(id, _)| id).collect()
     }
 
     fn ranked_aerial_pass_targets_filtered(
         &self,
         player_id: usize,
         limit: usize,
+        visible_only: bool,
+    ) -> Vec<usize> {
+        let key = (player_id, visible_only);
+        if let Some(cached) = self.ranked_aerial_pass_cache.borrow().get(&key) {
+            return cached.iter().take(limit).copied().collect();
+        }
+        let full = self.ranked_aerial_pass_targets_filtered_full(player_id, visible_only);
+        let result: Vec<usize> = full.iter().take(limit).copied().collect();
+        self.ranked_aerial_pass_cache.borrow_mut().insert(key, full);
+        result
+    }
+
+    fn ranked_aerial_pass_targets_filtered_full(
+        &self,
+        player_id: usize,
         visible_only: bool,
     ) -> Vec<usize> {
         let Some(me) = self.players.iter().find(|p| p.id == player_id) else {
@@ -25688,7 +25736,7 @@ impl WorldSnapshot {
             })
             .collect::<Vec<_>>();
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        ranked.into_iter().take(limit).map(|(id, _)| id).collect()
+        ranked.into_iter().map(|(id, _)| id).collect()
     }
 
     pub fn player_can_see_player(&self, observer_id: usize, target_id: usize) -> bool {
@@ -64090,6 +64138,8 @@ fn tracking_frame_to_world_snapshot(
     let score_diff_home = score_home as i32 - score_away as i32;
     WorldSnapshot {
         tick: frame.tick,
+        ranked_floor_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+        ranked_aerial_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         clock_seconds: frame.clock_seconds,
         dt_seconds: config.dt_seconds,
         field_length: config.field_length_yards,
