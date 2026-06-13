@@ -486,7 +486,12 @@ const PRESSURE_RISING_REF_CLOSING_YPS: f64 = 6.0;
 const PRESSURE_RISING_ENGAGE_YARDS: f64 = 12.0;
 // How many seconds a fully-rising press (closing fast, in range) trims off the holder's
 // allowed on-ball dwell -- the lever that makes a holder pass SOONER under mounting pressure.
-const EXCESSIVE_HOLD_RISING_SHRINK_SECONDS: f64 = 0.9;
+const EXCESSIVE_HOLD_RISING_SHRINK_SECONDS: f64 = 1.4;
+// Point 4: keep the carrier ~1.5-2yd off opponents in open play (dribbling straight
+// into a defender is a needless turnover); relax to a tight buffer in the final
+// third, where taking a man on is worth the risk.
+const DRIBBLE_OPEN_PLAY_MIN_FORWARD_SPACE_YARDS: f64 = 1.8;
+const DRIBBLE_FINAL_THIRD_YARDS_TO_GOAL: f64 = 36.0;
 // "Calm down and pass" damp on flashy evade moves (feint / side-step / swivel) when an
 // unpressured holder has a clean pass on. DAMP is the max fraction shaved off; FLOOR keeps
 // a legal evade from ever being fully zeroed (it can still fire if it's truly the best).
@@ -550,9 +555,9 @@ const OWN_BOX_ACROSS_GOAL_SAFE_LANE_YARDS: f64 = 6.0;
 // near-zero completion so the ranker (and the holder's pass-vs-hold decision) avoids it,
 // driving the direct-to-opponent rate toward zero.
 const SLOW_OPPONENT_MAX_SPEED_YPS: f64 = 1.96; // ~4 mph
-const GIFT_PASS_LANE_RADIUS_YARDS: f64 = 1.7;
-const GIFT_PASS_ENDPOINT_RADIUS_YARDS: f64 = 2.6;
-const GIFT_PASS_QUALITY_FLOOR: f64 = 0.05;
+const GIFT_PASS_LANE_RADIUS_YARDS: f64 = 2.1;
+const GIFT_PASS_ENDPOINT_RADIUS_YARDS: f64 = 3.2;
+const GIFT_PASS_QUALITY_FLOOR: f64 = 0.02;
 // Per-yard reward for a forward pass to an OPEN receiver (openness 0..1 × forward yards, capped
 // at 24yd). Biases pass selection toward playing forward to the most-open player.
 const FORWARD_OPEN_PASS_BONUS_PER_YARD: f64 = 0.05;
@@ -8362,7 +8367,12 @@ impl PlayerAgent {
         let central_defender_forward_blocked = is_central_defender
             && observation.forward_dribble_space_yards
                 < CENTRAL_DEFENDER_FORWARD_DRIBBLE_MIN_SPACE_YARDS;
-        let carry_forward_legal = (observation.forward_dribble_space_yards >= 1.2
+        let carry_forward_min_space = if observation.yards_to_goal <= DRIBBLE_FINAL_THIRD_YARDS_TO_GOAL {
+            1.2
+        } else {
+            DRIBBLE_OPEN_PLAY_MIN_FORWARD_SPACE_YARDS
+        };
+        let carry_forward_legal = (observation.forward_dribble_space_yards >= carry_forward_min_space
             || goalmouth_carry_forced)
             && !goal_attack_shot_required
             && !central_defender_forward_blocked;
@@ -8487,7 +8497,7 @@ impl PlayerAgent {
             * pressure_urgency.max(pressure);
         let own_half_retention = if own_half { 0.30 } else { 0.0 };
         let protect_ball_ceiling =
-            (0.88 + goal_side_shield * 0.34 + own_half_retention + pressure_rising * 0.22)
+            (0.88 + goal_side_shield * 0.34 + own_half_retention + pressure_rising * 0.34)
                 .clamp(0.88, 1.46);
         let protect_ball_score = (dribble_score
             * (0.12
@@ -8498,7 +8508,7 @@ impl PlayerAgent {
                 + own_half_retention
                 // Rising pressure (a man bearing down) is exactly when you turn your
                 // body between him and the ball -- lift the shield's urgency hard.
-                + pressure_rising * 0.62
+                + pressure_rising * 0.80
                 + (1.0 - observation.perceived_time_on_ball_seconds / 2.8).clamp(0.0, 1.0) * 0.24))
             .clamp(0.01, protect_ball_ceiling);
         // Calm on the ball: when a clean pass is on and the holder is NOT under real
@@ -64203,7 +64213,7 @@ fn excessive_hold_pressure_from_parts(
         - immediate_dispossession_risk.clamp(0.0, 1.0) * 1.00
         - pressure_rising.clamp(0.0, 1.0) * EXCESSIVE_HOLD_RISING_SHRINK_SECONDS)
         .clamp(0.55, ELITE_DRIBBLE_HOLD_BASE_SECONDS + 0.75);
-    ((actual_hold - allowed_seconds) / 3.2).clamp(0.0, 1.0)
+    ((actual_hold - allowed_seconds) / 2.4).clamp(0.0, 1.0)
 }
 
 fn excessive_hold_pressure(observation: &SoccerPomdpObservation, dribbling: f64) -> f64 {
