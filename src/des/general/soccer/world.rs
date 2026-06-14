@@ -4099,6 +4099,9 @@ impl SoccerMatch {
 
     fn mark_ball_received(&mut self, holder_id: usize) {
         mark_player_receive_facing(&mut self.players, holder_id);
+        // Possession changed hands: reseed the carried-ball orbit from the new
+        // carrier's geometry next tick (no winding carried over from the loser).
+        self.ball.reset_carry_orbit();
     }
 
     fn record_reward_event(&mut self, player_id: usize, amount: f64) {
@@ -5200,10 +5203,10 @@ impl SoccerMatch {
         let fatigue_multiplier = 1.0 + player.fatigue.clamp(0.0, 1.0) * 0.45;
         let dt = self.config.dt_seconds.max(1e-6);
         let load_rate = load / dt;
-        let load_delta = load_rate.max(0.0) / 12.0 * 0.006 * dt;
-        let reward_delta = reward_cost.max(0.0) * 0.006;
+        let load_delta = load_rate.max(0.0) / 12.0 * 0.001 * dt;
+        let reward_delta = reward_cost.max(0.0) * 0.001;
         let delta = ((load_delta + reward_delta) * stamina_resistance * fatigue_multiplier)
-            .clamp(0.0, 0.018);
+            .clamp(0.0, 0.003);
         player.fatigue = (player.fatigue + delta).clamp(0.0, 1.0);
     }
 
@@ -5522,10 +5525,12 @@ impl SoccerMatch {
     }
 
     /// True when the carrier's body is physically between the ball and this
-    /// defender: the ball is pushed out in front of the carrier (the way they
-    /// face / run) and the defender is on the far side, more than a yard off the
-    /// ball. A defender in that position cannot win the ball cleanly — the only
-    /// way through the body is a foul — so a clean dispossession must be denied.
+    /// defender (the carrier is shielding) AND the defender is more than a yard
+    /// off the ball. From there a clean dispossession is impossible — the only way
+    /// past the body is a foul — so the steal must be denied. With the orbital
+    /// carry model the ball can sit anywhere around the body, so this keys purely
+    /// on the betweenness geometry (ball and defender on opposite sides of the
+    /// carrier), not on the body facing.
     pub(crate) fn carrier_shields_ball_from_defender(&self, attacker_id: usize, defender_id: usize) -> bool {
         if attacker_id >= self.players.len() || defender_id >= self.players.len() {
             return false;
@@ -5534,26 +5539,12 @@ impl SoccerMatch {
         let defender = &self.players[defender_id];
         let attacker_pos = attacker.position;
         let ball = self.ball.position;
-        // The direction the carrier faces and pushes the ball toward (matches
-        // `carried_ball_lead`); running pace pushes the ball ahead along this axis.
-        let facing = {
-            let f = Vec2::new(attacker.facing_yaw.cos(), attacker.facing_yaw.sin());
-            if f.len() > 1e-6 {
-                f.normalized()
-            } else {
-                Vec2::new(0.0, attacker.team.attack_dir())
-            }
-        };
         let to_ball = ball - attacker_pos;
         let to_ball_dist = to_ball.len();
         if to_ball_dist < 1e-3 {
             return false;
         }
         let to_ball_dir = to_ball / to_ball_dist;
-        // The ball must be in front of the carrier (pushed ahead the way they face).
-        if facing.dot(to_ball_dir) < SHIELD_BALL_AHEAD_DOT {
-            return false;
-        }
         let to_def = defender.position - attacker_pos;
         if to_def.len() < 1e-3 {
             return false;
@@ -5700,6 +5691,8 @@ impl SoccerMatch {
         self.ball.altitude_yards = 0.0;
         self.ball.curl_acceleration = Vec2::zero();
         self.ball.last_touch_team = Some(attacker_team);
+        // The dribbler re-secured the ball past the defender: reseed the orbit.
+        self.ball.reset_carry_orbit();
         self.pending_pass = None;
         self.pending_shot = None;
         self.record_reward_event(attacker_id, kind.beat_reward_points());
@@ -6750,24 +6743,50 @@ impl SoccerMatch {
             self.ball.holder = None;
             return;
         };
-        let (foot_position, velocity, acceleration, jerk, team) = (
-            player.position + carried_ball_lead(player),
-            player.velocity,
-            player.acceleration,
-            player.jerk,
-            player.team,
+        let player_pos = player.position;
+        let velocity = player.velocity;
+        let acceleration = player.acceleration;
+        let jerk = player.jerk;
+        let team = player.team;
+        let facing_yaw = player.facing_yaw;
+        // The active dribble move (if any) decides where the ball orbits and whether it
+        // may cut through the body line; the nearest opponent tightens close control.
+        let move_kind = player
+            .last_decision
+            .as_ref()
+            .map(|decision| normalize_soccer_action_label(&decision.action))
+            .and_then(dribble_move_kind_for_action_label);
+        let nearest_opponent_distance = self
+            .players
+            .iter()
+            .filter(|other| other.team != team)
+            .map(|other| other.position.distance(player_pos))
+            .fold(f64::INFINITY, f64::min);
+        let (desired_dir, desired_radius, allow_through, orbit_rate) =
+            carried_ball_orbit_command(facing_yaw, move_kind, nearest_opponent_distance);
+        let field_width = self.config.field_width_yards;
+        let field_length = self.config.field_length_yards;
+        let tick = self.tick;
+        // Orbit the ball around the carrier (advanced at most once per tick; later calls
+        // in the same tick just re-anchor it to the carrier's current position).
+        let target = self.ball.advance_carried_ball_orbit(
+            tick,
+            player_pos,
+            desired_dir,
+            desired_radius,
+            allow_through,
+            orbit_rate,
+            self.config.dt_seconds,
+            field_width,
+            field_length,
+            &mut self.rng,
         );
-        let target = foot_position.clamp_to_pitch(
-            self.config.field_width_yards,
-            self.config.field_length_yards,
-        );
-        // First-touch settle: if the ball is more than a touch away from the feet
-        // (just controlled from a distance), draw it in smoothly rather than
-        // snapping — no teleport. Normal carrying stays within the cap, so it's exact.
+        // First-touch settle: if the ball is much further out than the orbit target
+        // (just controlled from a distance), draw it in smoothly rather than snapping.
         let delta = target - self.ball.position;
         self.ball.position = if delta.len() > CONTROL_FIRST_TOUCH_SETTLE_MAX_STEP_YARDS {
             (self.ball.position + delta.normalized() * CONTROL_FIRST_TOUCH_SETTLE_MAX_STEP_YARDS)
-                .clamp_to_pitch(self.config.field_width_yards, self.config.field_length_yards)
+                .clamp_to_pitch(field_width, field_length)
         } else {
             target
         };
@@ -10039,6 +10058,31 @@ pub struct BallAgent {
     pub(crate) untargeted_long_ball_launcher: Option<(usize, u64)>,
     #[serde(default)]
     pub(crate) untargeted_long_ball_flight: Option<UntargetedLongBallFlight>,
+    /// --- Carried-ball orbital state (planet/sun dribbling model) ---
+    /// Absolute angle (radians, world frame) at which the carried ball currently
+    /// sits relative to the carrier's feet. The ball orbits the player like a
+    /// planet about the sun: this angle advances under a rate cap each tick
+    /// rather than snapping to wherever the body faces.
+    #[serde(default)]
+    pub(crate) carry_orbit_world_rad: f64,
+    /// Distance (yards) the carried ball sits from the carrier's feet. Eases
+    /// toward the touch lead, floored by the body's half-width so on ordinary
+    /// touches the ball travels AROUND the carrier, never through them.
+    #[serde(default)]
+    pub(crate) carry_orbit_radius_yards: f64,
+    /// Signed net winding (radians) swept around the carrier during the CURRENT
+    /// possession — used to keep full wrap-arounds (>270 deg) rare.
+    #[serde(default)]
+    pub(crate) carry_orbit_swept_rad: f64,
+    /// Once the 270-deg winding cap is reached, a rare (~5%) roll unlocks further
+    /// wrapping for the rest of this possession; sticky until possession changes.
+    #[serde(default)]
+    pub(crate) carry_orbit_wrap_unlocked: bool,
+    /// Last tick on which the orbit was advanced — distinguishes a continuing
+    /// possession (advance smoothly) from a freshly (re)won ball (reseed from the
+    /// actual geometry, no snap) and guards against double-advancing in one tick.
+    #[serde(default)]
+    pub(crate) carry_orbit_last_tick: u64,
 }
 
 impl BallAgent {
@@ -10070,6 +10114,11 @@ impl BallAgent {
             last_decision: None,
             untargeted_long_ball_launcher: None,
             untargeted_long_ball_flight: None,
+            carry_orbit_world_rad: 0.0,
+            carry_orbit_radius_yards: 0.0,
+            carry_orbit_swept_rad: 0.0,
+            carry_orbit_wrap_unlocked: false,
+            carry_orbit_last_tick: 0,
         }
     }
 
@@ -10204,6 +10253,128 @@ impl BallAgent {
             .map(|(player_id, _)| player_id)
     }
 
+    /// Advance the carried ball's orbit one tick toward the carrier's desired resting
+    /// spot and return the new world position. The ball is modelled as a planet about
+    /// the carrier (the sun): its orbit angle and radius change under caps each tick
+    /// instead of snapping, so the ball rotates AROUND the body (and the body can pivot
+    /// around a lagging ball). The radius is floored on ordinary play so the ball never
+    /// passes through the carrier; only special moves (`allow_through_body`) may bring it
+    /// onto/through the body line. A per-possession winding cap keeps >270-deg
+    /// wrap-arounds rare. Advances at most once per tick; a second call in the same tick
+    /// just re-anchors the ball to the (possibly moved) carrier.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn advance_carried_ball_orbit(
+        &mut self,
+        tick: u64,
+        player_pos: Vec2,
+        desired_dir: Vec2,
+        desired_radius: f64,
+        allow_through_body: bool,
+        max_orbit_rate_rad_s: f64,
+        dt_seconds: f64,
+        field_width: f64,
+        field_length: f64,
+        rng: &mut SeededRandom,
+    ) -> Vec2 {
+        use std::f64::consts::{PI, TAU};
+        // Already advanced this tick (e.g. by the ball sub-agent before the world's
+        // post-step sync): re-anchor to the stored orbit without stepping again.
+        if self.carry_orbit_last_tick == tick && tick != 0 {
+            let dir = Vec2::new(
+                self.carry_orbit_world_rad.cos(),
+                self.carry_orbit_world_rad.sin(),
+            );
+            return (player_pos + dir * self.carry_orbit_radius_yards)
+                .clamp_to_pitch(field_width, field_length);
+        }
+        let dt = dt_seconds.clamp(1e-3, 1.0);
+        let desired_dir = if desired_dir.len() > 1e-6 {
+            desired_dir.normalized()
+        } else {
+            Vec2::new(0.0, 1.0)
+        };
+        let target_angle = desired_dir.y.atan2(desired_dir.x);
+        let radius_floor = if allow_through_body {
+            CARRY_THROUGH_MIN_RADIUS_YARDS
+        } else {
+            CARRY_BODY_FLOOR_RADIUS_YARDS
+        };
+        let target_radius = desired_radius.clamp(radius_floor, CARRY_MAX_ORBIT_RADIUS_YARDS);
+
+        // Fresh possession (a gap since the last advance, or never advanced): reseed the
+        // orbit from the actual ball geometry so it is not snapped, and clear the winding.
+        let rel = self.position - player_pos;
+        let rel_len = rel.len();
+        let fresh = self.carry_orbit_last_tick == 0 || self.carry_orbit_last_tick + 1 < tick;
+        let (cur_angle, cur_radius) = if fresh {
+            self.carry_orbit_swept_rad = 0.0;
+            // Decide ONCE per possession whether the ball may wind freely around the
+            // body: a rare (~5%) possession is unlocked, so wrap-arounds beyond 270 deg
+            // happen less than 5% of the time. The rest are clamped at the cap.
+            self.carry_orbit_wrap_unlocked = rng.next_float() < CARRY_ORBIT_WRAP_UNLOCK_PROBABILITY;
+            if rel_len > 1e-6 {
+                (rel.y.atan2(rel.x), rel_len)
+            } else {
+                (target_angle, target_radius)
+            }
+        } else {
+            (self.carry_orbit_world_rad, self.carry_orbit_radius_yards)
+        };
+
+        // Ease the radius toward the target, floored by the body half-width (unless a
+        // special move lets the ball come through the body line).
+        let radius_step = CARRY_ORBIT_RADIUS_EASE_YPS * dt;
+        let new_radius = (cur_radius
+            + (target_radius - cur_radius).clamp(-radius_step, radius_step))
+        .clamp(radius_floor, CARRY_MAX_ORBIT_RADIUS_YARDS);
+
+        // Shortest signed angular step toward the resting spot, capped by the orbit rate.
+        let mut dtheta = target_angle - cur_angle;
+        while dtheta > PI {
+            dtheta -= TAU;
+        }
+        while dtheta < -PI {
+            dtheta += TAU;
+        }
+        let max_step = max_orbit_rate_rad_s.max(0.0) * dt;
+        let mut step = dtheta.clamp(-max_step, max_step);
+
+        // Per-possession winding cap: unless this possession rolled the rare unlock,
+        // clamp the net winding at 270 deg. Only steps that INCREASE the winding
+        // magnitude are gated; unwinding back toward the front is always free.
+        if !self.carry_orbit_wrap_unlocked && step.abs() > 1e-9 {
+            let projected = self.carry_orbit_swept_rad + step;
+            let increases = projected.abs() > self.carry_orbit_swept_rad.abs();
+            if increases && projected.abs() > CARRY_ORBIT_POSSESSION_SOFT_CAP_RAD {
+                let capped = CARRY_ORBIT_POSSESSION_SOFT_CAP_RAD * projected.signum();
+                step = capped - self.carry_orbit_swept_rad;
+            }
+        }
+        self.carry_orbit_swept_rad += step;
+
+        let mut new_angle = cur_angle + step;
+        while new_angle > PI {
+            new_angle -= TAU;
+        }
+        while new_angle < -PI {
+            new_angle += TAU;
+        }
+        self.carry_orbit_world_rad = new_angle;
+        self.carry_orbit_radius_yards = new_radius;
+        self.carry_orbit_last_tick = tick;
+
+        let dir = Vec2::new(new_angle.cos(), new_angle.sin());
+        (player_pos + dir * new_radius).clamp_to_pitch(field_width, field_length)
+    }
+
+    /// Reset the carried-ball orbit so the next advance reseeds from the actual ball
+    /// geometry (called whenever possession changes hands — no winding carried over).
+    pub(crate) fn reset_carry_orbit(&mut self) {
+        self.carry_orbit_swept_rad = 0.0;
+        self.carry_orbit_wrap_unlocked = false;
+        self.carry_orbit_last_tick = 0;
+    }
+
     fn run_time_step(
         &mut self,
         context: BallStepContext<'_>,
@@ -10211,16 +10382,47 @@ impl BallAgent {
     ) -> BallStepOutcome {
         if let Some(holder) = self.holder {
             if let Some(player) = context.players.iter().find(|player| player.id == holder) {
-                let lead = carried_ball_lead(player);
-                self.position = (player.position + lead)
-                    .clamp_to_pitch(context.field_width, context.field_length);
-                self.velocity = player.velocity;
-                self.acceleration = player.acceleration;
-                self.jerk = player.jerk;
+                let nearest_opponent_distance = context
+                    .players
+                    .iter()
+                    .filter(|other| other.team != player.team)
+                    .map(|other| other.position.distance(player.position))
+                    .fold(f64::INFINITY, f64::min);
+                let move_kind = player
+                    .last_decision
+                    .as_ref()
+                    .map(|decision| normalize_soccer_action_label(&decision.action))
+                    .and_then(dribble_move_kind_for_action_label);
+                let (desired_dir, desired_radius, allow_through, orbit_rate) =
+                    carried_ball_orbit_command(
+                        player.facing_yaw,
+                        move_kind,
+                        nearest_opponent_distance,
+                    );
+                let player_pos = player.position;
+                let player_velocity = player.velocity;
+                let player_acceleration = player.acceleration;
+                let player_jerk = player.jerk;
+                let player_team = player.team;
+                self.position = self.advance_carried_ball_orbit(
+                    context.tick,
+                    player_pos,
+                    desired_dir,
+                    desired_radius,
+                    allow_through,
+                    orbit_rate,
+                    context.dt_seconds,
+                    context.field_width,
+                    context.field_length,
+                    rng,
+                );
+                self.velocity = player_velocity;
+                self.acceleration = player_acceleration;
+                self.jerk = player_jerk;
                 self.curl_acceleration = Vec2::zero();
                 self.altitude_yards = 0.0;
                 self.resistance = BallResistanceFrame::default();
-                self.last_touch_team = Some(player.team);
+                self.last_touch_team = Some(player_team);
                 let action = self
                     .last_decision
                     .as_ref()

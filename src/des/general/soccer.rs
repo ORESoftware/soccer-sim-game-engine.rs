@@ -129,9 +129,12 @@ const DIZZINESS_RECOVERY_PER_SECOND: f64 = 0.60;
 const DIZZINESS_MAX: f64 = 1.2;
 const DIZZINESS_CONTROL_PENALTY: f64 = 0.30; // control-radius loss at max dizziness
 const DIZZINESS_REWARD_PENALTY_POINTS: f64 = 2.2; // per unit dizziness, per second
-const YAW_ENERGY_FATIGUE_PER_RAD: f64 = 0.0035; // energy cost of rotating
-// Sustained, contiguous high-urgency involvement near the ball is tiring.
-const BALL_INVOLVEMENT_FATIGUE_PER_SECOND: f64 = 0.045;
+const YAW_ENERGY_FATIGUE_PER_RAD: f64 = 0.0006; // energy cost of rotating (per radian turned)
+// Sustained, contiguous high-urgency involvement near the ball is tiring. Scaled
+// to the same all-match budget as the anaerobic gait rates (see `fatigue_delta`):
+// the 12yd ball radius catches many players, so a high rate here would wall the
+// whole midfield within seconds.
+const BALL_INVOLVEMENT_FATIGUE_PER_SECOND: f64 = 0.005;
 const BALL_INVOLVEMENT_RADIUS_YARDS: f64 = 12.0;
 // Two-tier energy: `fatigue` is the slow aerobic drain; `anaerobic_load` is the
 // fast burst reserve spent by sprints/accelerations and recovered over ~tens of
@@ -184,7 +187,7 @@ const ANAEROBIC_CAPACITY_MAX_J_PER_KG: f64 = 600.0;
 const ANAEROBIC_RECOVERY_GAIN: f64 = 0.32;
 const ANAEROBIC_RECOVERY_CAP_W_PER_KG: f64 = 4.0;
 // A slice of supra-CP work also accrues slow aerobic fatigue (per kJ over CP).
-const SUPRA_CP_AEROBIC_FATIGUE_PER_KJ: f64 = 0.0009;
+const SUPRA_CP_AEROBIC_FATIGUE_PER_KJ: f64 = 0.00015;
 // Burst-speed ceiling: a mild linear sag plus a steep cliff as W′ empties.
 const ANAEROBIC_CEILING_LINEAR_SAG: f64 = 0.15;
 const ANAEROBIC_CEILING_KNEE: f64 = 0.72; // depletion fraction where the cliff begins
@@ -238,13 +241,12 @@ const POSSESSION_REGAIN_GRACE_TICKS: u64 = secs_to_ticks(0.5);
 /// ~80% of the time, but at the cost of progression (modelled elsewhere).
 const SHIELDED_HOLDER_TACKLE_SUCCESS_CAP: f64 = 0.20;
 /// Geometric body-shield gate (see `carrier_shields_ball_from_defender`): when the
-/// ball is pushed in front of the carrier and the defender is behind the body and
-/// more than a yard off the ball, a *clean* steal is impossible (foul only).
-/// `BALL_AHEAD_DOT`: how aligned the ball must be with the carrier's facing to count
-/// as "in front" (≈ within 72°). `DEFENDER_OPPOSITE_DOT`: how anti-aligned the
-/// defender must be with the ball direction to count as "behind the body" (≈ within
-/// 72° of straight behind). `DEFENDER_BALL_GAP_YARDS`: the user's "more than a yard".
-const SHIELD_BALL_AHEAD_DOT: f64 = 0.30;
+/// carrier's body is between the ball and the defender and the defender is more
+/// than a yard off the ball, a *clean* steal is impossible (foul only).
+/// `DEFENDER_OPPOSITE_DOT`: how anti-aligned the defender must be with the ball
+/// direction (about the carrier) to count as "on the far side of the body" (≈
+/// within 72° of straight opposite). `DEFENDER_BALL_GAP_YARDS`: the user's "more
+/// than a yard".
 const SHIELD_DEFENDER_OPPOSITE_DOT: f64 = 0.30;
 const SHIELD_DEFENDER_BALL_GAP_YARDS: f64 = 1.0;
 /// Carrier goalward speed (yards/sec) above which the nearest defender engages
@@ -345,10 +347,48 @@ const PASS_SET_INTERCEPTOR_LANE_RADIUS_YARDS: f64 = 3.2;
 // allowed, so the guard is relaxed there.
 const DRIBBLE_OPPONENT_MIN_SPACE_YARDS: f64 = 2.0;
 const FINAL_THIRD_ATTACK_YARDS_TO_GOAL: f64 = 40.0;
+// Critical spacing discipline: the carrier should keep 2+ yards between the ball
+// and the NEAREST defender (in any direction), not just space straight ahead. As
+// that gap closes inside 2 yards the carrier should release the ball sooner —
+// forward dribbling is damped and passing is lifted — rather than let a defender
+// get on top of the ball. These weight that crowding response.
+const DRIBBLE_CROWDED_SPACE_DAMP: f64 = 0.55;
+const PASS_CROWDED_RELEASE_LIFT: f64 = 0.80;
 const DEFENSIVE_MID_CENTER_BACK_COVER_RADIUS_YARDS: f64 = 10.0;
 const PROBABILITY_REFERENCE_DT_SECONDS: f64 = 1.0;
 const DRIBBLE_TOUCH_LEAD_YARDS: f64 = 0.92;
 const DRIBBLE_HEAVY_TOUCH_MIN_YARDS: f64 = 2.25;
+// --- Carried-ball orbital mechanics (planet/sun dribbling model) ---
+// The carried ball orbits the player (and the player can pivot around the ball);
+// neither snaps. These cap how fast/far the ball can swing around the body and
+// keep the ball on one side (going AROUND the carrier) on ordinary touches.
+//
+// Max angular speed (rad/s) at which the ball can orbit the body on a NORMAL
+// touch — ~230 deg/s, so a 90-deg swing takes ~0.4s (a few touches), never a
+// single-tick teleport around the carrier.
+const CARRY_ORBIT_NORMAL_RATE_RAD_S: f64 = 4.0;
+// Special moves (cuts / fakes / nutmeg) chop the ball across the body far faster.
+const CARRY_ORBIT_SPECIAL_RATE_RAD_S: f64 = 11.0;
+// The ball stays at least this far from the carrier's feet on ordinary play, so
+// it arcs AROUND the body. Only special moves may pull it closer (passing it
+// THROUGH the player line).
+const CARRY_BODY_FLOOR_RADIUS_YARDS: f64 = 0.22;
+const CARRY_THROUGH_MIN_RADIUS_YARDS: f64 = 0.05;
+const CARRY_MAX_ORBIT_RADIUS_YARDS: f64 = 1.10;
+// Close-control orbit radius band: the ball sits ~0.25 yd from the feet under
+// tight pressure (tight control) and out to ~1.0 yd in open space.
+const CARRY_TIGHT_RADIUS_YARDS: f64 = 0.30;
+const CARRY_LOOSE_RADIUS_YARDS: f64 = 1.00;
+// An opponent inside this range tightens the carrier's control (shrinks the orbit
+// radius toward the tight value); fully tight by ~1 yd away.
+const CARRY_TIGHT_CONTROL_RANGE_YARDS: f64 = 5.0;
+// How fast the carried ball's radius eases toward the target radius (yds/s).
+const CARRY_ORBIT_RADIUS_EASE_YPS: f64 = 6.0;
+// Per-possession winding soft cap: the ball rarely wraps more than 270 deg around
+// the carrier in one possession. On reaching it, a rare roll either unlocks
+// further winding or clamps it.
+const CARRY_ORBIT_POSSESSION_SOFT_CAP_RAD: f64 = 4.712_388_980_384_69; // 270 deg
+const CARRY_ORBIT_WRAP_UNLOCK_PROBABILITY: f64 = 0.05;
 const SHOT_ON_FRAME_MIN_PROBABILITY: f64 = 0.60;
 const SHOT_KEEPER_BEAT_MIN_PROBABILITY: f64 = 0.30;
 const SHOT_BAILOUT_NEAR_GOAL_YARDS: f64 = 12.0;
@@ -2588,16 +2628,24 @@ impl MovementGait {
     fn fatigue_delta(self, stamina: f64, dt_seconds: f64) -> f64 {
         let cardio = ability01(stamina);
         let dt = dt_seconds.max(0.0);
+        // Per-second change in the 0..1 fatigue scalar, split along the aerobic /
+        // anaerobic line. Aerobic gaits (stand/walk/jog) sit at or below critical
+        // power, so a fit player SUSTAINS them all match — they recover or hold
+        // steady, they never empty the tank. Only the anaerobic gaits (run/sprint)
+        // deplete, and at a rate calibrated so a full match leaves players tired
+        // (mean fatigue well under the ~0.78 anaerobic "wall" knee) rather than
+        // exhausted in the first minute. See [`fatigue_speed_factor`].
         match self {
-            MovementGait::Stand => -0.012 * (0.75 + cardio * 0.75) * dt,
-            MovementGait::Walk | MovementGait::BackWalk => -0.008 * (0.70 + cardio * 0.60) * dt,
-            MovementGait::BackJog => 0.002 * (1.12 - cardio * 0.52) * dt,
+            MovementGait::Stand => -0.020 * (0.75 + cardio * 0.75) * dt,
+            MovementGait::Walk | MovementGait::BackWalk => -0.012 * (0.70 + cardio * 0.60) * dt,
+            // Jogging is aerobic: fit legs hold steady or recover slightly; only
+            // weak-cardio players tire, and very slowly.
+            MovementGait::BackJog | MovementGait::Jog => (0.0007 - cardio * 0.0011) * dt,
             MovementGait::Skip | MovementGait::BackSkip | MovementGait::SideStep => {
-                0.001 * (1.10 - cardio * 0.45) * dt
+                0.0004 * (1.10 - cardio * 0.45) * dt
             }
-            MovementGait::Jog => 0.003 * (1.15 - cardio * 0.55) * dt,
-            MovementGait::Run => 0.010 * (1.35 - cardio * 0.65) * dt,
-            MovementGait::Sprint => 0.025 * (1.55 - cardio * 0.80) * dt,
+            MovementGait::Run => 0.0011 * (1.35 - cardio * 0.65) * dt,
+            MovementGait::Sprint => 0.0030 * (1.55 - cardio * 0.80) * dt,
         }
     }
 }
@@ -37949,6 +37997,59 @@ fn carried_ball_lead(player: &PlayerAgent) -> Vec2 {
         Vec2::new(0.0, player.team.attack_dir())
     };
     facing * DRIBBLE_TOUCH_LEAD_YARDS
+}
+
+/// Where the carrier wants the ball this tick — the resting spot the orbital
+/// model eases toward. Returns `(desired_world_dir, desired_radius, allow_through_body,
+/// max_orbit_rate_rad_s)`.
+///
+/// - Direction is derived from the body facing and the active dribble move: an
+///   ordinary carry keeps the ball ahead; carry-outs nudge it to a front-side; cuts
+///   / fakes / nutmegs swing it hard across (and may take it THROUGH the body line).
+/// - Radius is close control: ~0.25 yd under tight pressure out to ~1.0 yd in space
+///   (tighter the nearer the closest opponent).
+/// - Only special moves set `allow_through_body` (ordinary play arcs AROUND the body).
+fn carried_ball_orbit_command(
+    facing_yaw: f64,
+    move_kind: Option<DribbleMoveKind>,
+    nearest_opponent_distance: f64,
+) -> (Vec2, f64, bool, f64) {
+    let tightness = if nearest_opponent_distance.is_finite() {
+        ((CARRY_TIGHT_CONTROL_RANGE_YARDS - nearest_opponent_distance)
+            / (CARRY_TIGHT_CONTROL_RANGE_YARDS - 1.0).max(1e-6))
+        .clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let radius =
+        CARRY_LOOSE_RADIUS_YARDS + (CARRY_TIGHT_RADIUS_YARDS - CARRY_LOOSE_RADIUS_YARDS) * tightness;
+    let dir_at = |relative_degrees: f64| {
+        let angle = facing_yaw + relative_degrees.to_radians();
+        Vec2::new(angle.cos(), angle.sin())
+    };
+    let (dir, allow_through, rate) = match move_kind {
+        Some(DribbleMoveKind::CarryOutLeft) => {
+            (dir_at(32.0), false, CARRY_ORBIT_NORMAL_RATE_RAD_S)
+        }
+        Some(DribbleMoveKind::CarryOutRight) => {
+            (dir_at(-32.0), false, CARRY_ORBIT_NORMAL_RATE_RAD_S)
+        }
+        Some(DribbleMoveKind::LeftCut) => (dir_at(78.0), true, CARRY_ORBIT_SPECIAL_RATE_RAD_S),
+        Some(DribbleMoveKind::RightCut) => (dir_at(-78.0), true, CARRY_ORBIT_SPECIAL_RATE_RAD_S),
+        Some(DribbleMoveKind::FakeLeftCutRight) => {
+            (dir_at(-72.0), true, CARRY_ORBIT_SPECIAL_RATE_RAD_S)
+        }
+        Some(DribbleMoveKind::FakeRightCutLeft) => {
+            (dir_at(72.0), true, CARRY_ORBIT_SPECIAL_RATE_RAD_S)
+        }
+        // A nutmeg pushes the ball straight through the gap — close and through.
+        Some(DribbleMoveKind::Nutmeg) => {
+            (dir_at(0.0), true, CARRY_ORBIT_SPECIAL_RATE_RAD_S)
+        }
+        // Carry-forward, protect-ball, plain hold: keep the ball ahead of the body.
+        _ => (dir_at(0.0), false, CARRY_ORBIT_NORMAL_RATE_RAD_S),
+    };
+    (dir.normalized(), radius, allow_through, rate)
 }
 
 fn dribble_heavy_touch_probability(player: &PlayerAgent, pressure: f64) -> f64 {
