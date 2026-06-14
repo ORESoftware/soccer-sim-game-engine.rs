@@ -24969,6 +24969,120 @@
     }
 
     #[test]
+    fn open_play_turnover_penalizes_losing_team_last_five_seconds() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 161,
+            ..Default::default()
+        });
+        // dt defaults to 1/15s, so the 5s window is 75 ticks. At tick 100,
+        // anything at tick >= 25 is in-window.
+        sim.tick = 100;
+        let window_ticks = (TURNOVER_HISTORY_WINDOW_SECONDS / sim.config.dt_seconds).round() as u64;
+        assert_eq!(window_ticks, 75);
+        let snap = WorldSnapshot::from_match(&sim);
+        let push = |sim: &mut SoccerMatch, tick: u64, player_id: usize, team: Team, action: &str| {
+            sim.recent_learning_history.push_back(SoccerLearningTransition {
+                tick,
+                player_id,
+                team,
+                role: sim.players[player_id].role,
+                state: snap.mdp_state_for_player(player_id),
+                observation: snap.observation_for(player_id),
+                belief: belief_from_observation(&snap.observation_for(player_id)),
+                action: action.to_string(),
+                action_target: None,
+                decision_context: SoccerDecisionContext::default(),
+                tactical_trace: SoccerTacticalLearningTrace::default(),
+                reward: 0.0,
+                next_state: snap.mdp_state_for_player(player_id),
+                next_observation: snap.observation_for(player_id),
+                done: false,
+            });
+        };
+        // Losing team (Home) actions: recent on-ball, old on-ball, recent off-ball.
+        push(&mut sim, 95, 5, Team::Home, "dribble"); // recent, on-ball
+        push(&mut sim, 30, 6, Team::Home, "dribble"); // near window edge, on-ball
+        push(&mut sim, 95, 7, Team::Home, "support-roam"); // recent, off-ball
+        // Out of window (tick 5 < 25) and the other team — both must be ignored.
+        push(&mut sim, 5, 8, Team::Home, "dribble");
+        push(&mut sim, 95, 12, Team::Away, "dribble");
+
+        // Away now controls the ball: an open-play turnover by Home.
+        sim.last_controlled_possession_team = Some(Team::Home);
+        sim.ball.holder = Some(12);
+        sim.ball.last_touch_team = Some(Team::Away);
+        let after = WorldSnapshot::from_match(&sim);
+        sim.detect_and_penalize_open_play_turnover(&after);
+
+        assert_eq!(sim.last_controlled_possession_team, Some(Team::Away));
+        // Only the three in-window Home actions are replayed.
+        assert_eq!(sim.deferred_reward_transitions.len(), 3);
+        assert!(sim
+            .deferred_reward_transitions
+            .iter()
+            .all(|t| t.team == Team::Home && t.reward < 0.0));
+        let reward_at = |tick: u64, action: &str| -> f64 {
+            sim.deferred_reward_transitions
+                .iter()
+                .find(|t| t.tick == tick && t.action == action)
+                .map(|t| t.reward)
+                .expect("transition present")
+        };
+        let recent_on_ball = reward_at(95, "dribble");
+        let old_on_ball = reward_at(30, "dribble");
+        let recent_off_ball = reward_at(95, "support-roam");
+        // Recency: the action at the moment of loss is blamed hardest.
+        assert!(recent_on_ball < old_on_ball);
+        // On-ball culpability: the carrier is blamed more than an off-ball runner
+        // acting on the same tick.
+        assert!(recent_on_ball < recent_off_ball);
+    }
+
+    #[test]
+    fn turnover_detector_ignores_same_team_keep_and_post_restart_touch() {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            duration_seconds: 0.1,
+            seed: 162,
+            ..Default::default()
+        });
+        sim.tick = 50;
+        sim.recent_learning_history.push_back(SoccerLearningTransition {
+            tick: 48,
+            player_id: 5,
+            team: Team::Home,
+            role: sim.players[5].role,
+            state: WorldSnapshot::from_match(&sim).mdp_state_for_player(5),
+            observation: WorldSnapshot::from_match(&sim).observation_for(5),
+            belief: belief_from_observation(&WorldSnapshot::from_match(&sim).observation_for(5)),
+            action: "dribble".to_string(),
+            action_target: None,
+            decision_context: SoccerDecisionContext::default(),
+            tactical_trace: SoccerTacticalLearningTrace::default(),
+            reward: 0.0,
+            next_state: WorldSnapshot::from_match(&sim).mdp_state_for_player(5),
+            next_observation: WorldSnapshot::from_match(&sim).observation_for(5),
+            done: false,
+        });
+
+        // Same team keeps controlled possession: no turnover.
+        sim.last_controlled_possession_team = Some(Team::Home);
+        sim.ball.holder = Some(5); // Home player
+        let after = WorldSnapshot::from_match(&sim);
+        sim.detect_and_penalize_open_play_turnover(&after);
+        assert!(sim.deferred_reward_transitions.is_empty());
+
+        // After a dead ball the last controller is cleared, so the first touch by
+        // the other team is a restart, not a turnover.
+        sim.last_controlled_possession_team = None;
+        sim.ball.holder = Some(12); // Away player
+        let after = WorldSnapshot::from_match(&sim);
+        sim.detect_and_penalize_open_play_turnover(&after);
+        assert!(sim.deferred_reward_transitions.is_empty());
+        assert_eq!(sim.last_controlled_possession_team, Some(Team::Away));
+    }
+
+    #[test]
     fn defensive_delay_reward_flows_into_transition_tick() {
         let mut sim = SoccerMatch::default_11v11(MatchConfig {
             dt_seconds: 0.2,

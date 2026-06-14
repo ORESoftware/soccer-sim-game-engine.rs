@@ -909,6 +909,22 @@ const MATCH_RESULT_MARGIN_PENALTY_PER_GOAL: f64 = 0.75;
 const DEFENSIVE_GOAL_HISTORY_ACTIONS: usize = 50;
 const DEFENSIVE_GOAL_HISTORY_MAX_PENALTY: f64 = 0.075;
 const DEFENSIVE_GOAL_HISTORY_MIN_PENALTY: f64 = 0.014;
+/// When a team loses controlled possession to the opponent in open play (a
+/// dispossession, interception, miscontrol — any turnover), the actions the
+/// losing team took over the preceding [`TURNOVER_HISTORY_WINDOW_SECONDS`] are
+/// retroactively penalized and replayed into every learner (tabular Q, the
+/// adversarial team policies, and the neural value/actor-critic models). The
+/// blame is recency-weighted: the action at the moment of loss is most culpable
+/// (`MAX`), decaying linearly to the action at the window edge (`MIN`).
+const TURNOVER_HISTORY_WINDOW_SECONDS: f64 = 5.0;
+const TURNOVER_HISTORY_MAX_PENALTY: f64 = 0.05;
+const TURNOVER_HISTORY_MIN_PENALTY: f64 = 0.008;
+/// Cap on how many recent transitions a single turnover replays, so a dense
+/// possession burst can't flood the training stream.
+const TURNOVER_HISTORY_MAX_ACTIONS: usize = 80;
+/// Off-ball actions (support runs, shape) share the blame for a turnover but are
+/// less culpable than the on-ball action that actually conceded it.
+const TURNOVER_OFFBALL_BLAME_FRACTION: f64 = 0.45;
 const DEFENSIVE_RELAXATION_THREAT_YARDS: f64 = 48.0;
 const NO_PRESSURE_BACK_PASS_THRESHOLD_YARDS: f64 = 10.0;
 const SETTLED_POSSESSION_SECONDS: f64 = 5.0;
@@ -13541,6 +13557,51 @@ fn soccer_goal_credit_action_is_relevant(action: &str) -> bool {
             | "clearance"
             | "route-one"
     )
+}
+
+/// Whether an action label is an on-ball action — one the player performs while
+/// in possession of the ball. The carrier/passer who actually conceded a
+/// turnover will have one of these as their last action, so it carries the full
+/// turnover blame; off-ball actions share a reduced fraction.
+fn soccer_action_is_on_ball(action: &str) -> bool {
+    matches!(
+        normalize_soccer_action_label(action),
+        "shoot"
+            | "first-time-shot"
+            | "first-time-header"
+            | "pass"
+            | "killer-pass"
+            | "aerial-pass"
+            | "flank-low-cross"
+            | "flank-high-cross"
+            | "first-time-pass"
+            | "dribble"
+            | "carry-forward"
+            | "carry-out-left"
+            | "carry-out-right"
+            | "protect-ball"
+            | "side-step"
+            | "left-cut"
+            | "right-cut"
+            | "nutmeg"
+            | "fake-left-cut-right"
+            | "fake-right-cut-left"
+            | "hold-up-flank"
+            | "control-touch"
+            | "clearance"
+            | "route-one"
+    )
+}
+
+/// Recency- and culpability-blended turnover blame for one recent action. The
+/// on-ball action that conceded possession is fully culpable; off-ball support
+/// shares [`TURNOVER_OFFBALL_BLAME_FRACTION`].
+fn turnover_action_blame_multiplier(action: &str) -> f64 {
+    if soccer_action_is_on_ball(action) {
+        1.0
+    } else {
+        TURNOVER_OFFBALL_BLAME_FRACTION
+    }
 }
 
 fn soccer_context_defender_distance(transition: &SoccerLearningTransition, fallback: f64) -> f64 {
