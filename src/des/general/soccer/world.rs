@@ -17688,6 +17688,29 @@ impl WorldSnapshot {
     /// [`Self::loose_ball_recovery_target_for`] and the loose-ball-chaser predicate
     /// ([`Self::is_committed_loose_ball_chaser`]).
     pub(crate) fn loose_ball_contest_target_for(&self, player_id: usize) -> Vec2 {
+        // A pass still IN FLIGHT is contested on its LANE: a contester beside or ahead of
+        // the ball's path steps to the nearest point on it to cut the ball out, instead of
+        // trailing the ball's stale current spot. `projected_loose_ball_target` bails while
+        // a pass is pending, so without this a player a yard or two off the trajectory is
+        // told to chase where the ball already WAS and "lets it roll" past — the live bug
+        // where nearby players (either team) never contest a ground pass. The intended
+        // receiver meets the ball via `pending_pass_reception_target_for` and never reaches
+        // this contest path. Only divert a player who is level-with or ahead of the ball on
+        // the lane; a player trailing the ball still chases via the loose-ball cutoff below.
+        if let Some(pass) = self.pending_pass.as_ref() {
+            if self.ball.holder.is_none() && !pass.flight.is_aerial() {
+                if let Some(me) = self.players.iter().find(|p| p.id == player_id) {
+                    let me_pos = self.player_snapshot_position(me);
+                    let from = self.ball.position;
+                    let to = pass.intended_target;
+                    let factor = segment_projection_factor(from, to, me_pos);
+                    if factor > 1e-3 {
+                        return (from + (to - from) * factor)
+                            .clamp_to_pitch(self.field_width, self.field_length);
+                    }
+                }
+            }
+        }
         let projected = self
             .projected_loose_ball_target()
             .unwrap_or(self.ball.position);
