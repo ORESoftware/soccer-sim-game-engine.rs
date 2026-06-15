@@ -17688,6 +17688,56 @@ impl WorldSnapshot {
     /// [`Self::loose_ball_recovery_target_for`] and the loose-ball-chaser predicate
     /// ([`Self::is_committed_loose_ball_chaser`]).
     pub(crate) fn loose_ball_contest_target_for(&self, player_id: usize) -> Vec2 {
+        // A ground pass still IN FLIGHT is contested on its LANE: an opponent of the passer
+        // near the ball's path steps to the nearest point on it to cut the ball out, instead
+        // of trailing the ball's stale current spot. `projected_loose_ball_target` bails while
+        // a pass is pending, so without this a defender a yard or two off the trajectory is
+        // told to chase where the ball already WAS and "lets it roll" past — the live bug
+        // where nearby players never make the effort to intercept a ground pass.
+        //
+        // Only an OPPONENT of the passer is diverted: the passing team's off-ball players keep
+        // their support shape (they must not jump in front of their own intended receiver, who
+        // meets the ball via `pending_pass_reception_target_for` and never reaches this path).
+        // The step-in is gated by the SAME reach model the physics resolver uses (mirrors
+        // `pass_lane_clearance` / `nearest_ball_controller_for_segment`): the defender commits
+        // only when they can reach their nearest point on the lane before the ball passes it,
+        // so the decision predicts exactly the cut-outs the simulation allows and a defender
+        // too far off the lane is never dragged out of shape.
+        if let Some(pass) = self.pending_pass.as_ref() {
+            if self.ball.holder.is_none() && !pass.flight.is_aerial() {
+                if let Some(me) = self.players.iter().find(|p| p.id == player_id) {
+                    if me.team != pass.team && me.role != PlayerRole::Goalkeeper {
+                        let from = self.ball.position;
+                        let to = pass.intended_target;
+                        let lane = to - from;
+                        let lane_len = lane.len();
+                        if lane_len > 1e-3 {
+                            let dir = lane * (1.0 / lane_len);
+                            let me_pos = self.player_snapshot_position(me);
+                            let along = (me_pos - from).dot(dir).clamp(0.0, lane_len);
+                            if along > 1e-3 {
+                                let lane_point = from + dir * along;
+                                let perp_gap = me_pos.distance(lane_point);
+                                let speed = self.ball.velocity.len().max(1.0);
+                                let t_ball = along / speed;
+                                let sprint_speed = player_top_speed_yps(me.role, &me.skills)
+                                    * fatigue_speed_factor(me.skills.stamina, me.fatigue)
+                                    * MovementGait::Sprint.speed_multiplier();
+                                let intercept_window = (t_ball
+                                    - PASS_LANE_INTERCEPT_REACTION_SECONDS)
+                                    .clamp(0.0, PASS_LANE_INTERCEPT_MAX_WINDOW_SECONDS);
+                                let reach =
+                                    INTERCEPT_LUNGE_REACH_YARDS + sprint_speed * intercept_window;
+                                if perp_gap <= reach {
+                                    return lane_point
+                                        .clamp_to_pitch(self.field_width, self.field_length);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let projected = self
             .projected_loose_ball_target()
             .unwrap_or(self.ball.position);
