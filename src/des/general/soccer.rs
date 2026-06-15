@@ -1341,6 +1341,18 @@ const VERTICAL_LANE_COUNT: usize = 4;
 const TEAMMATE_OCCUPIED_SPACE_RADIUS_YARDS: f64 = 7.5;
 const TEAMMATE_OCCUPIED_SPACE_HARD_RADIUS_YARDS: f64 = 2.8;
 const TEAMMATE_OCCUPIED_SPACE_MAX_PENALTY: f64 = 16.0;
+// Ball-carrier driving-lane keep-out. When a teammate is carrying the ball and
+// driving forward UNPRESSURED, off-ball teammates must not run into the narrow
+// corridor directly ahead of the carrier — that clogs the dribble and burns the
+// space the carrier is attacking. The corridor runs `LENGTH` yds ahead of the
+// carrier along its driving line, `HALF_WIDTH` yds to either side; an off-ball
+// target inside it is nudged sideways out to the corridor edge (same depth).
+// Suppressed when the carrier IS under pressure (a defender within
+// `PRESSURE_RELIEF_DISTANCE`): then a teammate dropping into that lane to offer a
+// short outlet is exactly what's wanted.
+const CARRIER_LANE_KEEPOUT_LENGTH_YARDS: f64 = 12.0;
+const CARRIER_LANE_KEEPOUT_HALF_WIDTH_YARDS: f64 = 2.5;
+const CARRIER_LANE_KEEPOUT_PRESSURE_RELIEF_DISTANCE_YARDS: f64 = 4.5;
 // Territorial spacing discipline. "Cover territory" is a fundamental of both
 // attacking and defending: two teammates in the same small patch add no value.
 // Players are expected to keep at least this much space between them — but this
@@ -3819,7 +3831,7 @@ fn build_live_decision_trace_entry(
     // A pass is "backward" when its aim point is meaningfully behind the passer along the
     // attacking direction (more than a yard — a square ball is not backward).
     let is_backward_pass = is_pass && chosen_forward_yards.is_some_and(|fwd| fwd < -1.0);
-    let options = decision
+    let mut options: Vec<LiveDecisionTraceOption> = decision
         .action_options
         .iter()
         .map(|option| LiveDecisionTraceOption {
@@ -3829,6 +3841,26 @@ fn build_live_decision_trace_entry(
             chosen: normalize_soccer_action_label(&option.label) == chosen_norm,
         })
         .collect();
+    // The recorded action must be representable among the options so that exactly one is
+    // flagged `chosen`. Some off-ball movement branches record a GRANULAR action label that
+    // is a refinement of the higher-level option they chose and so isn't itself one of the
+    // option labels — e.g. a "support-screen" / "support-push-up" / "shot-creation-run"
+    // execution of a "support-shape" choice, or a "defend" move drawn from the
+    // "defend-shape"/"defend-roam" options. Surface the chosen action as its own flagged
+    // option so the trace stays self-consistent instead of showing no selection at all.
+    if !chosen_norm.is_empty() && !options.iter().any(|option| option.chosen) {
+        let score = options
+            .iter()
+            .map(|option| option.score)
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
+        options.push(LiveDecisionTraceOption {
+            label: decision.action.clone(),
+            score,
+            legal: true,
+            chosen: true,
+        });
+    }
     LiveDecisionTraceEntry {
         tick,
         clock_seconds,

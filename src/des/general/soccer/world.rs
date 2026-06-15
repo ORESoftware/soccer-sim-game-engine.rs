@@ -17688,6 +17688,56 @@ impl WorldSnapshot {
     /// [`Self::loose_ball_recovery_target_for`] and the loose-ball-chaser predicate
     /// ([`Self::is_committed_loose_ball_chaser`]).
     pub(crate) fn loose_ball_contest_target_for(&self, player_id: usize) -> Vec2 {
+        // A ground pass still IN FLIGHT is contested on its LANE: an opponent of the passer
+        // near the ball's path steps to the nearest point on it to cut the ball out, instead
+        // of trailing the ball's stale current spot. `projected_loose_ball_target` bails while
+        // a pass is pending, so without this a defender a yard or two off the trajectory is
+        // told to chase where the ball already WAS and "lets it roll" past — the live bug
+        // where nearby players never make the effort to intercept a ground pass.
+        //
+        // Only an OPPONENT of the passer is diverted: the passing team's off-ball players keep
+        // their support shape (they must not jump in front of their own intended receiver, who
+        // meets the ball via `pending_pass_reception_target_for` and never reaches this path).
+        // The step-in is gated by the SAME reach model the physics resolver uses (mirrors
+        // `pass_lane_clearance` / `nearest_ball_controller_for_segment`): the defender commits
+        // only when they can reach their nearest point on the lane before the ball passes it,
+        // so the decision predicts exactly the cut-outs the simulation allows and a defender
+        // too far off the lane is never dragged out of shape.
+        if let Some(pass) = self.pending_pass.as_ref() {
+            if self.ball.holder.is_none() && !pass.flight.is_aerial() {
+                if let Some(me) = self.players.iter().find(|p| p.id == player_id) {
+                    if me.team != pass.team && me.role != PlayerRole::Goalkeeper {
+                        let from = self.ball.position;
+                        let to = pass.intended_target;
+                        let lane = to - from;
+                        let lane_len = lane.len();
+                        if lane_len > 1e-3 {
+                            let dir = lane * (1.0 / lane_len);
+                            let me_pos = self.player_snapshot_position(me);
+                            let along = (me_pos - from).dot(dir).clamp(0.0, lane_len);
+                            if along > 1e-3 {
+                                let lane_point = from + dir * along;
+                                let perp_gap = me_pos.distance(lane_point);
+                                let speed = self.ball.velocity.len().max(1.0);
+                                let t_ball = along / speed;
+                                let sprint_speed = player_top_speed_yps(me.role, &me.skills)
+                                    * fatigue_speed_factor(me.skills.stamina, me.fatigue)
+                                    * MovementGait::Sprint.speed_multiplier();
+                                let intercept_window = (t_ball
+                                    - PASS_LANE_INTERCEPT_REACTION_SECONDS)
+                                    .clamp(0.0, PASS_LANE_INTERCEPT_MAX_WINDOW_SECONDS);
+                                let reach =
+                                    INTERCEPT_LUNGE_REACH_YARDS + sprint_speed * intercept_window;
+                                if perp_gap <= reach {
+                                    return lane_point
+                                        .clamp_to_pitch(self.field_width, self.field_length);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let projected = self
             .projected_loose_ball_target()
             .unwrap_or(self.ball.position);
@@ -20964,6 +21014,83 @@ impl WorldSnapshot {
         self.shape_guarded_movement_point(player_id, proposed, fallback_candidates, home, roam)
     }
 
+    /// Lateral keep-out from the ball carrier's forward driving lane. Returns
+    /// `target` shoved sideways to the edge of the carrier's lane when (a) a
+    /// teammate (not this player) is carrying the ball, (b) that carrier is NOT
+    /// under pressure, (c) the carrier is driving goalward, and (d) `target`
+    /// sits inside the narrow corridor directly ahead of the carrier. Otherwise
+    /// returns `target` unchanged. This stops an off-ball teammate from running
+    /// straight into the path the carrier is dribbling into — unless the carrier
+    /// is pressured and actually needs a short outlet in that lane.
+    fn off_carrier_lane_target(&self, player: &PlayerSnapshot, target: Vec2) -> Vec2 {
+        if player.role == PlayerRole::Goalkeeper {
+            return target;
+        }
+        let Some(holder_id) = self.ball.holder else {
+            return target;
+        };
+        if holder_id == player.id {
+            return target;
+        }
+        let Some(holder) = self.players.iter().find(|p| p.id == holder_id) else {
+            return target;
+        };
+        if holder.team != player.team {
+            return target;
+        }
+        let carrier_pos = self.player_snapshot_position(holder);
+        // Pressured carrier: allow teammates into the lane to offer a short outlet.
+        if self.nearest_opponent_distance_at(holder.team, carrier_pos)
+            <= CARRIER_LANE_KEEPOUT_PRESSURE_RELIEF_DISTANCE_YARDS
+        {
+            return target;
+        }
+        let attack = holder.team.attack_dir();
+        // Driving direction: the carrier's own motion when moving with intent,
+        // otherwise straight at the opponent goal. Must carry a goalward
+        // component — there is no forward lane to protect behind a carrier
+        // facing his own goal.
+        let velocity = self.player_velocity(holder.id).unwrap_or(holder.velocity);
+        let goalward = Vec2::new(self.field_width * 0.5, holder.team.goal_y(self.field_length))
+            - carrier_pos;
+        let drive_dir = if velocity.len() > 1.5 && velocity.y * attack > 0.0 {
+            velocity.normalized()
+        } else {
+            goalward.normalized()
+        };
+        if drive_dir.len() <= 1e-6 || drive_dir.y * attack <= 0.0 {
+            return target;
+        }
+        // Decompose the target relative to the carrier into along-/across-lane.
+        let rel = target - carrier_pos;
+        let longitudinal = rel.dot(drive_dir);
+        if longitudinal <= 0.0 || longitudinal > CARRIER_LANE_KEEPOUT_LENGTH_YARDS {
+            return target;
+        }
+        let along = drive_dir * longitudinal;
+        let across = rel - along;
+        if across.len() >= CARRIER_LANE_KEEPOUT_HALF_WIDTH_YARDS {
+            return target;
+        }
+        // Inside the corridor: push out sideways to its edge, keeping the same
+        // depth. `perp` is the driving line rotated 90°; keep the side the target
+        // is already on, defaulting to the side with more space when dead-centre.
+        let perp = Vec2::new(-drive_dir.y, drive_dir.x);
+        let side = if across.dot(perp).abs() > 1e-6 {
+            across.dot(perp).signum()
+        } else {
+            let left = carrier_pos + along + perp * CARRIER_LANE_KEEPOUT_HALF_WIDTH_YARDS;
+            let right = carrier_pos + along - perp * CARRIER_LANE_KEEPOUT_HALF_WIDTH_YARDS;
+            if self.space_score_at(left, player.team) >= self.space_score_at(right, player.team) {
+                1.0
+            } else {
+                -1.0
+            }
+        };
+        (carrier_pos + along + perp * (side * CARRIER_LANE_KEEPOUT_HALF_WIDTH_YARDS))
+            .clamp_to_pitch(self.field_width, self.field_length)
+    }
+
     pub(crate) fn shape_guarded_movement_point(
         &self,
         player_id: usize,
@@ -21020,11 +21147,12 @@ impl WorldSnapshot {
         } else {
             0.10
         };
-        if best_score > proposed_score + fallback_margin {
+        let chosen = if best_score > proposed_score + fallback_margin {
             best
         } else {
             proposed
-        }
+        };
+        self.off_carrier_lane_target(player, chosen)
     }
 
     pub(crate) fn space_score_at(&self, p: Vec2, team: Team) -> f64 {
