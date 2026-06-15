@@ -9863,6 +9863,86 @@ fn rolling_ground_ball_is_led_so_chasers_intercept_earlier() {
 }
 
 #[test]
+fn nearby_player_cuts_an_in_flight_ground_pass_on_its_lane() {
+    // A targeted floor pass is in flight on the ground, and an off-ball opponent stands a
+    // yard or two off the lane, well ahead of the ball, with plenty of time to react. They
+    // must STEP INTO THE LANE to cut the ball out — not trail it to where it currently is.
+    // (Regression for the live bug: `projected_loose_ball_target` bails while a pass is
+    // pending, so the contest target degraded to the ball's stale current spot and nearby
+    // players "let it roll" past instead of contesting it.)
+    let mut sim = SoccerMatch::default_11v11(MatchConfig {
+        duration_seconds: 0.1,
+        seed: 71,
+        ..Default::default()
+    });
+    for p in sim.players.iter_mut() {
+        p.position = Vec2::new(2.0, 2.0);
+    }
+    let passer = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.role != PlayerRole::Goalkeeper)
+        .map(|p| p.id)
+        .unwrap();
+    let receiver = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.role != PlayerRole::Goalkeeper && p.id != passer)
+        .map(|p| p.id)
+        .unwrap();
+    let defender = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Away && p.role != PlayerRole::Goalkeeper)
+        .map(|p| p.id)
+        .unwrap();
+    sim.players[passer].position = Vec2::new(40.0, 40.0);
+    sim.players[receiver].position = Vec2::new(40.0, 70.0);
+    // 1.5yd off the lane, ahead of the ball -> plenty of time to step in and cut it out.
+    let defender_pos = Vec2::new(41.5, 60.0);
+    sim.players[defender].position = defender_pos;
+    sim.ball.holder = None;
+    sim.ball.position = Vec2::new(40.0, 50.0);
+    sim.ball.velocity = Vec2::new(0.0, 8.0);
+    sim.ball.altitude_yards = 0.0;
+    sim.ball.last_touch_team = Some(Team::Home);
+    sim.pending_pass = Some(test_pending_pass(
+        Team::Home,
+        passer,
+        receiver,
+        Vec2::new(40.0, 40.0),
+        Vec2::new(40.0, 70.0),
+    ));
+
+    let snap = WorldSnapshot::from_match(&sim);
+    // The contest point is the lane foot beside the defender (~(40, 60)), not the ball's
+    // current spot (40, 50).
+    let contest = snap.loose_ball_contest_target_for(defender);
+    assert!(
+        (contest.x - 40.0).abs() < 0.2 && (contest.y - 60.0).abs() < 2.0,
+        "contest point should be the lane foot beside the defender, got {contest:?}"
+    );
+
+    // ...and the defender's actual decision must step TOWARD the lane (reduce its lateral
+    // gap to it), rather than dropping back toward where the ball already is.
+    let mut d = sim.players[defender].clone();
+    let intent = d.run_time_step(&snap, None, None, &mut mulberry32(7));
+    match intent.action {
+        SoccerAction::MoveTo(target) => {
+            assert!(
+                (target.x - 40.0).abs() < (defender_pos.x - 40.0).abs() + 1e-6,
+                "defender should step toward the pass lane (x->40) to intercept; target={target:?}"
+            );
+            assert!(
+                target.y > 52.0,
+                "defender should meet the ball on its lane ahead, not drop back to its current spot; target={target:?}"
+            );
+        }
+        other => panic!("defender beside an in-flight pass should move to cut it out, got {other:?}"),
+    }
+}
+
+#[test]
 fn midfield_line_holds_band_in_front_of_defenders() {
     let mut sim = SoccerMatch::default_11v11(MatchConfig {
         duration_seconds: 0.1,
