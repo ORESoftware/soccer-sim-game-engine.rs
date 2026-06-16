@@ -21615,6 +21615,57 @@ impl WorldSnapshot {
             .clamp_to_pitch(self.field_width, self.field_length)
     }
 
+    /// Defensive goal-side recovery override: when our team is out of possession, pull
+    /// an off-ball target that has been caught upfield of the ball back onto the own-goal
+    /// side of it (the segment between the ball and our own goal). See the
+    /// `DEFENSIVE_GOAL_SIDE_*` constants for the geometry. This is the directive the
+    /// learned policy's `defensive_goal_side_reward` only ever nudged toward.
+    fn defensive_goal_side_target(&self, player: &PlayerSnapshot, target: Vec2) -> Vec2 {
+        if player.role == PlayerRole::Goalkeeper {
+            return target;
+        }
+        // Defending iff the opponent is the possession team. `possession_team` falls back
+        // to `last_touch_team`, so this stays true while their pass is in flight.
+        let opponent = player.team.other();
+        if self.possession_team() != Some(opponent) {
+            return target;
+        }
+        let ball = self.ball.position;
+        // The nearest outfield teammate to the ball is the primary presser — leave it free
+        // to close the ball down rather than dropping goal-side with everyone else.
+        let presser = self
+            .players
+            .iter()
+            .filter(|p| p.team == player.team && p.role != PlayerRole::Goalkeeper)
+            .min_by(|a, b| {
+                self.player_snapshot_position(a)
+                    .distance(ball)
+                    .partial_cmp(&self.player_snapshot_position(b).distance(ball))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| p.id);
+        if presser == Some(player.id) {
+            return target;
+        }
+        // Axis pointing from the ball toward our own goal. "Goal-side" = a positive
+        // projection along it (on the own-goal side of the ball).
+        let own_goal = Vec2::new(self.field_width * 0.5, opponent.goal_y(self.field_length));
+        let axis_vec = own_goal - ball;
+        let axis_len = axis_vec.len();
+        if axis_len <= 1e-6 {
+            return target;
+        }
+        let axis = axis_vec / axis_len;
+        let along = (target - ball).dot(axis);
+        if along >= DEFENSIVE_GOAL_SIDE_MIN_YARDS {
+            return target;
+        }
+        // Pull toward at least `MIN` yds goal-side, but no more than `MAX_PULL` of
+        // correction per evaluation; clamp_to_pitch keeps it short of the goal line.
+        let deficit = (DEFENSIVE_GOAL_SIDE_MIN_YARDS - along).min(DEFENSIVE_GOAL_SIDE_MAX_PULL_YARDS);
+        (target + axis * deficit).clamp_to_pitch(self.field_width, self.field_length)
+    }
+
     pub(crate) fn shape_guarded_movement_point(
         &self,
         player_id: usize,
@@ -21676,7 +21727,8 @@ impl WorldSnapshot {
         } else {
             proposed
         };
-        self.off_carrier_lane_target(player, chosen)
+        let chosen = self.off_carrier_lane_target(player, chosen);
+        self.defensive_goal_side_target(player, chosen)
     }
 
     pub(crate) fn space_score_at(&self, p: Vec2, team: Team) -> f64 {
