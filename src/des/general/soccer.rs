@@ -1373,6 +1373,18 @@ const TEAMMATE_OCCUPIED_SPACE_MAX_PENALTY: f64 = 16.0;
 const CARRIER_LANE_KEEPOUT_LENGTH_YARDS: f64 = 12.0;
 const CARRIER_LANE_KEEPOUT_HALF_WIDTH_YARDS: f64 = 2.5;
 const CARRIER_LANE_KEEPOUT_PRESSURE_RELIEF_DISTANCE_YARDS: f64 = 4.5;
+// Defensive goal-side recovery. When the opponent has possession — INCLUDING while
+// their pass is in flight (no holder; `possession_team` falls back to last-touch) —
+// every non-pressing outfielder must be on the own-goal side of the ball, i.e. on
+// the segment between the ball and our own goal. An off-ball target that sits
+// upfield of the ball (between ball and the opponent goal) is pulled back along the
+// ball->own-goal axis until it is at least `MIN` yds goal-side, capped at `MAX_PULL`
+// yds of correction per evaluation so a high striker recovers progressively rather
+// than teleporting. Only the player's depth along that axis is corrected; lateral
+// offset is preserved so the back line keeps its width. The nearest outfielder to
+// the ball (the primary presser) is exempt — someone still closes the ball down.
+const DEFENSIVE_GOAL_SIDE_MIN_YARDS: f64 = 1.5;
+const DEFENSIVE_GOAL_SIDE_MAX_PULL_YARDS: f64 = 10.0;
 // Territorial spacing discipline. "Cover territory" is a fundamental of both
 // attacking and defending: two teammates in the same small patch add no value.
 // Players are expected to keep at least this much space between them — but this
@@ -16482,20 +16494,25 @@ fn defensive_role_press_signal(
 }
 
 fn defensive_goal_side_reward(team: Team, player_position: Vec2, snapshot: &WorldSnapshot) -> f64 {
-    let Some(attacker_position) = snapshot
+    // Engage whenever the opponent has possession — including while their pass is in
+    // flight (no holder), which is exactly the transition window where recovering
+    // goal-side matters most. `possession_team` falls back to `last_touch_team`.
+    if snapshot.possession_team() != Some(team.other()) {
+        return 0.0;
+    }
+    // Threat reference along the goal axis: the carrier if there is one, else the ball.
+    let attacker_y = snapshot
         .ball
         .holder
         .and_then(|holder| snapshot.players.iter().find(|p| p.id == holder))
         .filter(|holder| holder.team == team.other())
         .and_then(|holder| snapshot.player_position(holder.id))
-    else {
-        return 0.0;
-    };
+        .map(|pos| pos.y)
+        .unwrap_or(snapshot.ball.position.y);
     let own_goal_y = team.other().goal_y(snapshot.field_length);
     let goal_side_of_ball =
         goal_side_between_y(player_position.y, snapshot.ball.position.y, own_goal_y);
-    let goal_side_of_attacker =
-        goal_side_between_y(player_position.y, attacker_position.y, own_goal_y);
+    let goal_side_of_attacker = goal_side_between_y(player_position.y, attacker_y, own_goal_y);
     match (goal_side_of_ball, goal_side_of_attacker) {
         (true, true) => 0.24,
         (true, false) | (false, true) => -0.12,
