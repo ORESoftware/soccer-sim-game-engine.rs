@@ -4500,8 +4500,15 @@ impl SoccerMatch {
                 || self.tick as usize % interval == 0;
             let capture_full_game =
                 self.config.learning_enabled && self.config.full_game_learning_enabled;
+            // Retrieval capture must retain this episode's transitions itself: the
+            // n-step outcome in `config_moments()` is summed from
+            // `episode_learning_transitions`, so without this a corpus-builder that
+            // enables only `retrieval.capture_enabled` (full-game learning off) would
+            // get silently zeroed outcomes — the "how the decision turned out" signal.
+            let capture_config_moments = self.config.retrieval.capture_enabled;
             let capture_reward_transitions = has_tick_reward_events && !learning_due;
-            if learning_due || capture_full_game || capture_reward_transitions {
+            if learning_due || capture_full_game || capture_config_moments || capture_reward_transitions
+            {
                 let phase_started = Instant::now();
                 let tick_transitions = self.learning_transitions_for(
                     &tick_start_snapshot,
@@ -4511,7 +4518,7 @@ impl SoccerMatch {
                     &self.reward_events[reward_event_start..],
                 );
                 learning_transition_elapsed += phase_started.elapsed();
-                if capture_full_game {
+                if capture_full_game || capture_config_moments {
                     self.episode_learning_transitions
                         .extend(tick_transitions.iter().cloned());
                 }
@@ -4519,7 +4526,7 @@ impl SoccerMatch {
                 // ball carrier's decision this tick (≤1 per tick). The outcome
                 // (n-step return) is attached later by joining with the transition
                 // stream in `config_moments`. Gated off by default.
-                if self.config.retrieval.capture_enabled {
+                if capture_config_moments {
                     if let Some(holder) = tick_start_snapshot.ball.holder {
                         if let Some(carrier) =
                             tick_transitions.iter().find(|t| t.player_id == holder)
@@ -7176,21 +7183,25 @@ impl SoccerMatch {
                     // the ball straight back to a nearby presser (e.g. the player who just
                     // shot), he keeps holding until a genuinely open team-mate appears, up
                     // to the handling limit (then `update_keeper_handling` forces a clear).
-                    if let Some(held) = self.keeper_handling_held_seconds(player_id) {
-                        if held < GK_HANDLING_HOLD_LIMIT_SECONDS
-                            && !self.keeper_handling_release_is_intelligent(
-                                player_id, target_id, target,
-                            )
-                        {
-                            // Survey the field (face the considered outlet) and hold the ball.
-                            let look = target - player_pos;
-                            if look.len() > 1e-6 {
-                                let face = facing_bucket_from_vector(look);
-                                if face != FacingBucket::Unknown {
-                                    self.players[player_id].action_facing = face;
+                    // Skipped on a restart he is taking (a goal kick has its own hold/clear
+                    // rules in `restart_release_action`) — only open-play gathers hold here.
+                    if self.restart_double_touch_guard != Some(player_id) {
+                        if let Some(held) = self.keeper_handling_held_seconds(player_id) {
+                            if held < GK_HANDLING_HOLD_LIMIT_SECONDS
+                                && !self.keeper_handling_release_is_intelligent(
+                                    player_id, target_id, target,
+                                )
+                            {
+                                // Survey the field (face the outlet) and hold the ball.
+                                let look = target - player_pos;
+                                if look.len() > 1e-6 {
+                                    let face = facing_bucket_from_vector(look);
+                                    if face != FacingBucket::Unknown {
+                                        self.players[player_id].action_facing = face;
+                                    }
                                 }
+                                return;
                             }
-                            return;
                         }
                     }
                     let pressure = pressure_from_observation(&observation);
