@@ -38297,6 +38297,12 @@ fn defensive_assignment_keeps_retreat_connected_to_ball() {
 
 #[test]
 fn defensive_assignment_uses_permuted_genome_line_band() {
+    // This test isolates the per-player evolved genome band by parking the rest of
+    // the back line deep. The always-on collective back-line ball band would
+    // otherwise pull the lone live defender all the way up toward the ball (its
+    // centroid is dominated by the parked teammates), washing out the genome
+    // distinction — so disable that collective rule for this isolation test.
+    crate::des::general::soccer::world::set_back_line_ball_band_disabled_for_test(true);
     let target_y_for_band = |permutation_index: usize| {
         let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
         let defender = 2;
@@ -38319,6 +38325,7 @@ fn defensive_assignment_uses_permuted_genome_line_band() {
 
     let high_line_y = target_y_for_band(0); // 1..20 yd band
     let deeper_line_y = target_y_for_band(14); // 3..29 yd band
+    crate::des::general::soccer::world::set_back_line_ball_band_disabled_for_test(false);
     assert!(
         high_line_y > deeper_line_y + 4.0,
         "smaller evolved max gap should hold the line higher: high={high_line_y} deep={deeper_line_y}"
@@ -40993,6 +41000,36 @@ fn kickoff_arms_no_double_touch_guard_and_clears_on_another_touch() {
         .expect("another player");
     sim.record_possession_touch(other);
     assert_eq!(sim.restart_double_touch_guard, None);
+}
+
+#[test]
+fn restart_double_touch_guard_lets_a_teammate_collect_not_stall() {
+    // The taker can't re-control after a restart — but the ball must NOT stall at its feet when
+    // the taker is the closest player. The guard is passed INTO the controller search, so the
+    // taker is excluded from candidacy and the nearest OTHER player (a team-mate receiving the
+    // restart) collects the loose ball. (Pre-fix, filtering the single nearest to None left the
+    // ball dead at the taker's feet — the opening-kickoff stall.)
+    let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+    let taker = 6;
+    let teammate = 7;
+    park_players_except(&mut sim, &[taker, teammate]);
+    sim.ball.holder = None;
+    sim.ball.position = Vec2::new(40.0, 60.0);
+    sim.ball.velocity = Vec2::zero();
+    sim.ball.last_touch_team = Some(Team::Home);
+    sim.pending_pass = None;
+    sim.restart_double_touch_guard = Some(taker);
+    // Taker closest to the loose ball; the team-mate is just behind, still within control range.
+    sim.players[taker].position = Vec2::new(40.3, 60.0);
+    sim.players[teammate].position = Vec2::new(40.9, 60.0);
+
+    sim.run_ball_time_step();
+
+    assert_eq!(
+        sim.ball.holder,
+        Some(teammate),
+        "a team-mate must collect the restart (guarded taker excluded), not stall the ball"
+    );
 }
 
 #[test]
