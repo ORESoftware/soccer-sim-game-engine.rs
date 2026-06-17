@@ -2452,46 +2452,12 @@ impl PlayerAgent {
                 DribbleTouchDecision::new(0, 1.35),
             );
         }
-<<<<<<< HEAD
         // A neutral controlling touch carries the ball a little ahead. With pass-anticipation on,
         // the first touch is made PURPOSEFUL: flick it onto an onside team-mate's forward run, or —
         // under a bearing-down marker — push it into space away from his momentum to retain it.
         let neutral = (self.position + carried_ball_lead(self))
             .clamp_to_pitch(snapshot.field_width, snapshot.field_length);
         snapshot.first_touch_directional_target_for(self.id, neutral)
-=======
-        let pressured_touch = snapshot
-            .players
-            .iter()
-            .filter(|player| player.team != self.team)
-            .map(|player| (player.position, player.position.distance(self.position)))
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .filter(|(_, distance)| *distance <= 6.5)
-            .and_then(|(marker, _)| {
-                let away = self.position - marker;
-                if away.len() <= 1e-6 {
-                    return None;
-                }
-                let support_lane = snapshot
-                    .ranked_visible_pass_targets(self.id, 1)
-                    .first()
-                    .and_then(|target_id| snapshot.player_position(*target_id))
-                    .filter(|target| (target.y - self.position.y) * self.team.attack_dir() > 1.0)
-                    .map(|target| (target - self.position).normalized())
-                    .unwrap_or_else(|| Vec2::new(0.0, self.team.attack_dir()));
-                let direction = (away.normalized() * 0.72 + support_lane * 0.28).normalized();
-                let touch_yards = 1.05 + ability01(self.skills.first_touch) * 1.10;
-                Some(
-                    (self.position + direction * touch_yards)
-                        .clamp_to_pitch(snapshot.field_width, snapshot.field_length),
-                )
-            });
-        if let Some(target) = pressured_touch {
-            return target;
-        }
-        (self.position + carried_ball_lead(self))
-            .clamp_to_pitch(snapshot.field_width, snapshot.field_length)
->>>>>>> 3326b4e7e83ed9e505afb3724c6c5e10c8e6070a
     }
 
     fn human_shoot_or_carry_action(

@@ -23123,7 +23123,7 @@ fn run_time_step_intercepts_low_pending_pass_body_contact_but_not_high_loft() {
 
     let mut high = setup(PassFlight::Aerial);
     assert!(
-        pass_ball_altitude_yards(
+        pass_altitude_at_point(
             high.pending_pass.as_ref().expect("pending pass"),
             high.players[12].position,
         ) > LOW_BALL_FACING_REQUIRED_ALTITUDE_YARDS,
@@ -27380,55 +27380,7 @@ fn goal_reward_divides_pool_across_recent_attacking_chain() {
 }
 
 #[test]
-<<<<<<< HEAD
-fn direct_turnover_goal_distributes_reduced_reward_pool() {
-    // A goal where only a single scoring-team player touched the ball since
-    // winning it from the opponent (possession chain length 1) is a direct
-    // turnover: it distributes the reduced 30-point pool, not the full 100. The
-    // finisher's share is therefore 30% of what the same finish earns when a
-    // teammate was also involved in the move.
-    let shooter_share = |chain: &[usize]| -> f64 {
-        let mut sim = SoccerMatch::default_11v11(MatchConfig {
-            duration_seconds: 0.1,
-            seed: 154,
-            ..Default::default()
-        });
-        sim.tick = 40;
-        sim.possession_chain.clear();
-        for &id in chain {
-            sim.possession_chain.push_back(id);
-        }
-        sim.record_goal_rewards(Team::Home, Some(9));
-        sim.reward_events
-            .iter()
-            .filter(|event| event.player_id == 9)
-            .map(|event| event.amount)
-            .sum::<f64>()
-    };
-
-    // Direct turnover: the finisher is the only scoring-team toucher.
-    let turnover_shooter = shooter_share(&[9]);
-    // Built-up finish: a teammate touched it first, so the full pool applies.
-    let buildup_shooter = shooter_share(&[7, 9]);
-
-    let fraction = DIRECT_TURNOVER_GOAL_REWARD_POINTS / GOAL_REWARD_POINTS;
-    assert!(buildup_shooter > 0.0, "control finish should earn a reward");
-    assert!(
-        (turnover_shooter - buildup_shooter * fraction).abs() < 1e-9,
-        "turnover finisher should earn the reduced-pool fraction: turnover={turnover_shooter} \
-         buildup={buildup_shooter}"
-    );
-    assert!(
-        turnover_shooter < buildup_shooter,
-        "a direct-turnover goal must distribute less than a built-up goal"
-    );
-}
-
-#[test]
-fn goal_reward_contextualizes_recent_attacking_decisions() {
-=======
 fn direct_turnover_goal_distributes_only_thirty_points() {
->>>>>>> 3326b4e7e83ed9e505afb3724c6c5e10c8e6070a
     let mut sim = SoccerMatch::default_11v11(MatchConfig {
         duration_seconds: 0.1,
         seed: 155,
