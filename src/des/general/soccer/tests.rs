@@ -5320,6 +5320,137 @@ fn goalkeeper_handling_in_box_is_unstealable_then_forced_to_release() {
 }
 
 #[test]
+fn goalkeeper_handling_holds_for_open_outlet_then_distributes() {
+    let mut sim = SoccerMatch::default_11v11(MatchConfig {
+        dt_seconds: 0.1,
+        seed: 42,
+        ..Default::default()
+    });
+    let keeper = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.role == PlayerRole::Goalkeeper)
+        .unwrap()
+        .id;
+    let mate = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.role != PlayerRole::Goalkeeper)
+        .unwrap()
+        .id;
+    let presser = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Away && p.role != PlayerRole::Goalkeeper)
+        .unwrap()
+        .id;
+    let presser2 = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Away && p.role != PlayerRole::Goalkeeper && p.id != presser)
+        .unwrap()
+        .id;
+
+    // Park every opponent far up the pitch so only the marker we move matters to the lane.
+    let width = sim.config.field_width_yards;
+    for p in sim.players.iter_mut().filter(|p| p.team == Team::Away) {
+        p.position = Vec2::new(width * 0.5, 95.0);
+    }
+
+    // Keeper has just gathered a save in his hands, deep in his own box.
+    let box_pos = Vec2::new(width * 0.5, 6.0);
+    sim.players[keeper].position = box_pos;
+    sim.ball.holder = Some(keeper);
+    sim.ball.position = box_pos;
+    sim.clock_seconds = 50.0;
+    sim.update_keeper_handling();
+    assert_eq!(sim.keeper_handling_held_seconds(keeper), Some(0.0));
+
+    // The only outlet is tightly marked by the player who just pressed → not an
+    // intelligent release; the keeper should hold (he is unstealable, in no hurry).
+    let mate_pos = Vec2::new(width * 0.5, 24.0);
+    sim.players[mate].position = mate_pos;
+    sim.players[presser].position = mate_pos + Vec2::new(1.0, 0.5);
+    let snapshot = WorldSnapshot::from_match(&sim);
+    assert!(!sim.keeper_handling_release_is_intelligent(&snapshot, keeper, Some(mate), mate_pos));
+    sim.apply_player_intent(PlayerIntent {
+        player_id: keeper,
+        action: SoccerAction::Pass {
+            target_player: Some(mate),
+            power: 0.6,
+            flight: PassFlight::Floor,
+        },
+        sprint: false,
+    });
+    assert_eq!(
+        sim.ball.holder,
+        Some(keeper),
+        "keeper must hold the ball rather than distribute straight to a presser"
+    );
+
+    // Once the outlet is genuinely open the keeper distributes immediately.
+    sim.players[presser].position = Vec2::new(width * 0.5, 95.0);
+    let _ = presser2;
+    let snapshot = WorldSnapshot::from_match(&sim);
+    assert!(sim.keeper_handling_release_is_intelligent(&snapshot, keeper, Some(mate), mate_pos));
+    sim.apply_player_intent(PlayerIntent {
+        player_id: keeper,
+        action: SoccerAction::Pass {
+            target_player: Some(mate),
+            power: 0.6,
+            flight: PassFlight::Floor,
+        },
+        sprint: false,
+    });
+    assert_eq!(
+        sim.ball.holder, None,
+        "keeper should distribute once a team-mate is genuinely open"
+    );
+}
+
+#[test]
+fn goalkeeper_forced_clearance_avoids_the_central_presser() {
+    let mut sim = SoccerMatch::default_11v11(MatchConfig {
+        dt_seconds: 0.1,
+        seed: 7,
+        ..Default::default()
+    });
+    let keeper = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.role == PlayerRole::Goalkeeper)
+        .unwrap()
+        .id;
+    let width = sim.config.field_width_yards;
+    let box_pos = Vec2::new(width * 0.5, 6.0);
+    sim.players[keeper].position = box_pos;
+    sim.ball.holder = Some(keeper);
+    sim.ball.position = box_pos;
+    // A presser dead ahead, centrally — a straight hoof would go right back to him.
+    if let Some(opp) = sim
+        .players
+        .iter_mut()
+        .find(|p| p.team == Team::Away && p.role != PlayerRole::Goalkeeper)
+    {
+        opp.position = Vec2::new(width * 0.5, 30.0);
+    }
+    sim.clock_seconds = 50.0;
+    sim.update_keeper_handling();
+    sim.clock_seconds = 50.0 + GK_HANDLING_HOLD_LIMIT_SECONDS + 0.1;
+    sim.update_keeper_handling();
+    assert_eq!(sim.ball.holder, None, "the handling limit must force a release");
+    assert!(
+        sim.ball.velocity.x.abs() > 1.0,
+        "the forced clearance should angle toward an open channel, not straight up the middle: {:?}",
+        sim.ball.velocity
+    );
+    assert!(
+        sim.ball.velocity.y > 0.0,
+        "the clearance must still go upfield (away from our own goal)"
+    );
+}
+
+#[test]
 fn quick_receiver_dispossession_penalizes_original_passer() {
     let mut sim = SoccerMatch::default_11v11(MatchConfig {
         dt_seconds: 0.1,
@@ -10099,6 +10230,31 @@ fn lateral_pass_penalty_demotes_square_recycling() {
     assert!(
         GROUND_LATERAL_PASS_PENALTY > AERIAL_LATERAL_PASS_PENALTY,
         "ground square balls need the stronger demotion because they are the overused recycle"
+    );
+}
+
+#[test]
+fn long_backward_pass_penalty_prefers_short_resets() {
+    // Forward, square, and short-backward (≤5yd) balls carry no long-backward demerit.
+    assert_eq!(long_backward_pass_penalty(6.0), 0.0);
+    assert_eq!(long_backward_pass_penalty(0.0), 0.0);
+    assert_eq!(long_backward_pass_penalty(-3.0), 0.0);
+    assert_eq!(long_backward_pass_penalty(-5.0), 0.0);
+    // Beyond 5yd backward the demerit kicks in and grows with distance, so a 3–5yd
+    // reset is preferred over a long backward ball.
+    assert!(long_backward_pass_penalty(-8.0) > 0.0);
+    assert!(long_backward_pass_penalty(-12.0) > long_backward_pass_penalty(-8.0));
+    // …but it is capped so it can't dominate the whole ranking score.
+    assert_eq!(
+        long_backward_pass_penalty(-200.0),
+        LONG_BACKWARD_PASS_PENALTY_MAX
+    );
+    // Exact per-yard shape just past the threshold.
+    assert!(
+        (long_backward_pass_penalty(-7.0)
+            - 2.0 * LONG_BACKWARD_PASS_PENALTY_PER_YARD)
+            .abs()
+            < 1e-9
     );
 }
 
@@ -33264,6 +33420,64 @@ fn territorial_spacing_is_stable_and_bounded_over_real_matches() {
 }
 
 #[test]
+fn support_target_guard_blocks_running_past_a_moving_teammate() {
+    // A moving teammate sitting directly in the straight line to the run target is
+    // a "running past each other / switching positions" swap: the run must be
+    // truncated to stop short of that teammate rather than cross past them. A
+    // man-marking run (target landing on an opponent) is exempt and still crosses.
+    let build = |mark_opponent_on_target: bool| -> (Vec2, Vec2, Vec2) {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+        let holder = 7;
+        let runner = 6;
+        let crosser = 8;
+        let marker_opp = 17; // an Away outfielder, parked unless used as a mark
+        park_players_except(&mut sim, &[holder, runner, crosser, marker_opp]);
+        // Ball carried far away so the quick-exchange-by-the-ball exemption is off.
+        sim.ball.holder = Some(holder);
+        sim.ball.position = Vec2::new(6.0, 6.0);
+        sim.ball.last_touch_team = Some(Team::Home);
+        sim.players[holder].position = sim.ball.position;
+
+        let home = sim.players[runner].home_position;
+        let runner_pos = home;
+        let target = Vec2::new(home.x, home.y + 14.0);
+        // Teammate moving back toward the runner, squarely on the path to target.
+        let crosser_pos = Vec2::new(home.x, home.y + 7.0);
+        sim.players[runner].position = runner_pos;
+        sim.players[runner].velocity = Vec2::zero();
+        sim.players[crosser].position = crosser_pos;
+        sim.players[crosser].velocity = Vec2::new(0.0, -4.0);
+
+        sim.players[marker_opp].position = if mark_opponent_on_target {
+            target
+        } else {
+            Vec2::new(64.0, 100.0)
+        };
+
+        let snapshot = WorldSnapshot::from_match(&sim);
+        let guarded =
+            snapshot.shape_guarded_support_point(runner, target, &[target], home, false);
+        (crosser_pos, target, guarded)
+    };
+
+    let (crosser_pos, target, guarded) = build(false);
+    assert!(
+        guarded.y < crosser_pos.y,
+        "run must stop short of the moving teammate it would cross: guarded={guarded:?} crosser={crosser_pos:?}"
+    );
+    assert!(
+        guarded.distance(target) > 5.0,
+        "truncated run must not reach the far-side target: guarded={guarded:?} target={target:?}"
+    );
+
+    let (crosser_pos_mark, _target_mark, guarded_mark) = build(true);
+    assert!(
+        guarded_mark.y > crosser_pos_mark.y,
+        "a man-marking run (target on an opponent) is exempt and still crosses: guarded={guarded_mark:?} crosser={crosser_pos_mark:?}"
+    );
+}
+
+#[test]
 fn support_target_guard_rejects_teammate_occupied_final_space() {
     let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
     let holder = 7;
@@ -39945,6 +40159,82 @@ fn steal_urgency_rises_with_advancement_and_requires_cover() {
     assert!(
         (not_advancing - 1.0).abs() < 1e-9,
         "a carrier that is not advancing is simply contained: {not_advancing}"
+    );
+}
+
+#[test]
+fn carrier_deep_in_own_third_is_pressed_not_contained() {
+    // The closer an opponent carrier dribbles toward our own goal, the more the
+    // nearest defender must step onto it rather than retreat — even a slow dribble,
+    // and even with no covering teammate. At the edge of our third the unchanged
+    // contain baseline still applies.
+    let engage_at = |carrier_y: f64, carrier_vy: f64| -> bool {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+        // Park every Home outfielder upfield so the chosen defender is the nearest.
+        for p in sim.players.iter_mut() {
+            if p.team == Team::Home && p.role != PlayerRole::Goalkeeper {
+                p.position = Vec2::new(5.0, 110.0);
+                p.home_position = p.position;
+            }
+        }
+        let defender = 2;
+        // Defender a few yards goal-side of the carrier (well within engage range).
+        sim.players[defender].position = Vec2::new(40.0, carrier_y - 6.0);
+        sim.players[defender].home_position = sim.players[defender].position;
+        let carrier = 17; // Away
+        sim.players[carrier].position = Vec2::new(40.0, carrier_y);
+        sim.players[carrier].velocity = Vec2::new(0.0, carrier_vy); // toward our goal (y=0)
+        sim.ball.holder = Some(carrier);
+        sim.ball.position = sim.players[carrier].position;
+        sim.ball.last_touch_team = Some(Team::Away);
+        let snap = WorldSnapshot::from_match(&sim);
+        let me = snap.players.iter().find(|p| p.id == defender).unwrap();
+        snap.fast_carrier_engage_target_for(me).is_some()
+    };
+
+    // A slow jog (2 yps) at the edge of our third is still contained (baseline).
+    assert!(
+        !engage_at(36.0, -2.0),
+        "a jogging carrier at the edge of our third should still be contained"
+    );
+    // The same slow jog deep near our goal must now be pressed, not waved through.
+    assert!(
+        engage_at(9.0, -2.0),
+        "a carrier dribbling slowly into our box must be contested, not contained"
+    );
+
+    // Lone-defender (no cover) steal urgency: timid at the third edge, committed deep.
+    let urgency_at = |carrier_y: f64| -> f64 {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+        let defender = sim
+            .players
+            .iter()
+            .find(|p| p.team == Team::Home && p.role == PlayerRole::Defender)
+            .unwrap()
+            .id;
+        // No cover anywhere goal-side: park all other Home outfielders far upfield.
+        for p in sim.players.iter_mut() {
+            if p.team == Team::Home && p.id != defender && p.role != PlayerRole::Goalkeeper {
+                p.position = Vec2::new(5.0, 110.0);
+            }
+        }
+        let carrier = sim.players.iter().find(|p| p.team == Team::Away).unwrap().id;
+        sim.players[carrier].position = Vec2::new(40.0, carrier_y);
+        sim.players[carrier].velocity = Vec2::new(0.0, -3.0); // driving at our goal
+        sim.ball.holder = Some(carrier);
+        sim.ball.position = sim.players[carrier].position;
+        sim.players[defender].position = Vec2::new(40.0, carrier_y - 4.0); // goal-side, nearest
+        WorldSnapshot::from_match(&sim).advancing_carrier_steal_urgency(defender)
+    };
+    assert!(
+        urgency_at(40.0) < 1.0,
+        "a lone last defender at the third edge contains: {}",
+        urgency_at(40.0)
+    );
+    assert!(
+        urgency_at(9.0) > 1.0,
+        "a lone defender near our own goal must commit to the steal: {}",
+        urgency_at(9.0)
     );
 }
 

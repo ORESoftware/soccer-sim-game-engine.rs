@@ -377,6 +377,17 @@ const CARRIER_ADVANCE_STEPUP_FRACTION: f64 = 0.4; // close this share of the goa
                                                   // and trips the anti-bunchball swarm cap. ~2.8yd keeps them within the 3.1yd tackle
                                                   // reach while staying off the ball so they jockey rather than dogpile.
 const CARRIER_ADVANCE_JOCKEY_YARDS: f64 = 2.8;
+/// Depth-scaled pressing aggression in our own defensive third. The closer an
+/// opponent carrier gets to our own goal, the less a defender can afford to sit
+/// off and contain — letting a dribbler stroll into the box uncontested is worse
+/// than the risk of stepping up. `own_goal_press_urgency` ramps 0 at the edge of
+/// our defensive third up to 1 just outside our six-yard area, and scales how far
+/// we relax the engage speed-threshold and the lone-defender (no-cover) contain
+/// caution. It is 0 at/above the third edge, so midfield and our shallow half stay
+/// byte-identical to the contain baseline.
+const OWN_GOAL_PRESS_FULL_YARDS: f64 = 6.0; // at/inside this depth from our goal ⇒ full urgency.
+const OWN_GOAL_PRESS_SPEED_RELAX: f64 = 0.9; // deep ⇒ relax the engage speed threshold by up to 90%.
+const OWN_GOAL_PRESS_MIN_BOOST: f64 = 0.15; // deep lone defender crosses the 1.0 step-up trigger even vs a slow dribble.
 /// In the final third, weight per yard of goalward progress an off-ball run
 /// buys, rewarded ONLY when the candidate also sits in a clear receivable
 /// channel from the ball. Lets receivers balance open space with a direct route
@@ -647,6 +658,11 @@ const TEAMWORK_PROGRESS_NEAR_BALL_PLAYERS: usize = 5;
 const TEAMWORK_PROGRESS_MIN_RELOCATION_YARDS: f64 = 0.08;
 const TEAMWORK_PROGRESS_MIN_CREDIT: f64 = 0.024;
 const GOAL_REWARD_POINTS: f64 = 100.0;
+/// Reduced reward pool for a goal scored directly off a turnover — a single
+/// scoring-team player touched the ball between winning it from the opponent and
+/// finishing. There is no build-up play to credit, only the steal-and-finish, so
+/// the goal distributes 30 points instead of the full [`GOAL_REWARD_POINTS`].
+const DIRECT_TURNOVER_GOAL_REWARD_POINTS: f64 = 30.0;
 const GOAL_CONTEXT_CREDIT_MIN_PLAYERS: usize = 3;
 const GOAL_CONTEXT_CREDIT_MAX_PLAYERS: usize = 5;
 const GOAL_CONTEXT_CREDIT_SCAN_ACTIONS: usize = 48;
@@ -817,6 +833,16 @@ const BACKWARD_PASS_MIN_FORWARD_YARDS: f64 = 1.0;
 // ~openness 0.2 on the (distance-2.5)/7.5 openness curve: a backward ball is only safe
 // to a teammate with at least this much space from the nearest opponent.
 const BACKWARD_PASS_COVERED_RADIUS_YARDS: f64 = 4.0;
+// A short backward drop (≤5yd) keeps the ball safe and recyclable; a LONG backward pass
+// (>5yd) concedes territory and should be a last resort. The escalating per-yard demerit for
+// the long retreat itself lives in `long_backward_pass_penalty` (LONG_BACKWARD_PASS_*); this
+// cap additionally replaces the (8yd-optimal) length-PREFERENCE bonus for backward balls with
+// a SHORT-favouring curve (`backward_pass_length_preference`) so a 3-5yd drop isn't treated as
+// "sub-optimal length" relative to a longer backward ball.
+const BACKWARD_PASS_SHORT_MAX_YARDS: f64 = 5.0;
+// Backward pass-length preference fades from full (at the 5yd short cap) to zero over this
+// many additional yards.
+const BACKWARD_PASS_LENGTH_FADE_BAND_YARDS: f64 = 18.0;
 // The constant forward "lead the runner into space" bias tapers to zero over this much space
 // remaining to the attacking goal line, so a receiver near the box isn't led past the byline.
 const RECEPTION_FORWARD_BIAS_TAPER_YARDS: f64 = 28.0;
@@ -863,6 +889,15 @@ const FORWARD_OPEN_PASS_BONUS_PER_YARD: f64 = 0.075;
 // anywhere on the pitch. Lateral/square balls are handled separately by explicit penalties.
 const FORWARD_PASS_VALUE_MULTIPLIER: f64 = 3.0;
 const BACKWARD_PASS_VALUE_MULTIPLIER: f64 = 1.0;
+// A short backward reset (3–5yd back to a supporting player) is a normal, useful ball;
+// slinging it 6+ yards backward concedes real territory and should be distinctly worse.
+// Beyond this backward distance, an escalating per-yard demerit kicks in so a 3–5yd
+// backward pass is preferred over a long backward one whenever both are on offer.
+const LONG_BACKWARD_PASS_YARDS: f64 = 5.0;
+// Per-yard demerit for every yard a backward pass travels beyond LONG_BACKWARD_PASS_YARDS.
+const LONG_BACKWARD_PASS_PENALTY_PER_YARD: f64 = 0.85;
+// Cap so an extreme backward ball can't single-handedly dominate the ranking score.
+const LONG_BACKWARD_PASS_PENALTY_MAX: f64 = 6.5;
 // Be optimistic/skilled about playing a forward teammate who is only half-open:
 // qualified forward targets stay visible and get sane scoring floors instead of being
 // hidden behind safe square/backward recycling.
@@ -1451,6 +1486,35 @@ const CARRIER_LANE_KEEPOUT_PRESSURE_RELIEF_DISTANCE_YARDS: f64 = 4.5;
 // the ball (the primary presser) is exempt — someone still closes the ball down.
 const DEFENSIVE_GOAL_SIDE_MIN_YARDS: f64 = 1.5;
 const DEFENSIVE_GOAL_SIDE_MAX_PULL_YARDS: f64 = 10.0;
+// Position-swap / cross-through guard. Players "switching positions" and "running
+// past each other" is an artefact: off the ball a player should never steer a
+// straight line that carries it PAST a teammate (ending up on the far side of
+// them). The guard tests the path from the player's current position to its
+// movement target: if that path passes within `CORRIDOR_HALF_WIDTH` of a teammate
+// AND the target lies `BEYOND_MARGIN` yds beyond that teammate along the travel
+// direction (a genuine swap, not merely arriving alongside), the target is
+// truncated to stop `STOP_SHORT` yds short of the nearest such teammate — never
+// going backward. Only fires for moves longer than `MIN_TRAVEL`; the teammate
+// must be at least `MIN_AHEAD` yds up the path to count as "in the way".
+//
+// Legitimate exceptions are exempt, matching real football: a man-marking /
+// tracking run (its target lands within `MARK_RADIUS` of an opponent), a quick
+// exchange tight to the ball (the player or its target is within
+// `BALL_EXCHANGE` of the ball — handoffs and give-and-gos), running past the
+// ball carrier itself, and roaming set-piece movement (the caller's `roam` flag).
+const CROSS_THROUGH_MIN_TRAVEL_YARDS: f64 = 1.5;
+const CROSS_THROUGH_CORRIDOR_HALF_WIDTH_YARDS: f64 = 2.0;
+const CROSS_THROUGH_MIN_AHEAD_YARDS: f64 = 1.0;
+const CROSS_THROUGH_BEYOND_MARGIN_YARDS: f64 = 1.0;
+const CROSS_THROUGH_STOP_SHORT_YARDS: f64 = 2.5;
+const CROSS_THROUGH_MARK_RADIUS_YARDS: f64 = 3.0;
+const CROSS_THROUGH_BALL_EXCHANGE_YARDS: f64 = 6.0;
+// The guard only polices a crossed teammate who is actually MOVING (running past
+// each other / swapping). A stationary teammate merely standing in the straight
+// line to open space is handled by the spacing / occupied-space shape score,
+// which routes the run around them — truncating there would wrongly freeze a run
+// into genuine space. ~2 yps ≈ 4 mph, a clear jog.
+const CROSS_THROUGH_MATE_MIN_SPEED_YPS: f64 = 2.0;
 // Territorial spacing discipline. "Cover territory" is a fundamental of both
 // attacking and defending: two teammates in the same small patch add no value.
 // Players are expected to keep at least this much space between them — but this
@@ -1860,8 +1924,9 @@ const ATTACK_FORWARD_INTENT_BACKWARD_TOLERANCE_YARDS: f64 = 1.5;
 const UNCONTESTED_CARRIER_SPACE_YARDS: f64 = 6.0;
 /// While supporting an unpressured carrier, an off-ball attacker edges his support point
 /// up to this many yards ahead of his current position (capped onside) so he actively
-/// pushes up with the free carrier instead of standing still.
-const UNCONTESTED_SUPPORT_PUSH_YARDS: f64 = 4.0;
+/// pushes up with the free carrier instead of standing still. A bigger push gets more
+/// teammates genuinely sprinting forward to support an unpressured carrier on the attack.
+const UNCONTESTED_SUPPORT_PUSH_YARDS: f64 = 7.0;
 /// A staging run in behind is held this far ONSIDE of the second-last defender so the runner
 /// stays level/behind the line (timing the run) until the ball is actually played beyond it,
 /// rather than standing in an offside position.
@@ -1894,10 +1959,14 @@ const WALL_PASS_LANE_RADIUS_YARDS: f64 = 1.6;
 /// The wall needs at least this much space to turn the ball around first-time.
 const WALL_PASS_PARTNER_MIN_SPACE_YARDS: f64 = 2.0;
 /// A one-two commitment lapses this many seconds after the give if the return never comes.
-const WALL_PASS_RUN_TTL_SECONDS: f64 = 1.8;
+/// Longer than a single touch so the runner genuinely COMMITS to the give-and-go (bursts
+/// past his man and holds the line of the run waiting for the return) rather than abandoning
+/// it the instant the wall doesn't return it first-time.
+const WALL_PASS_RUN_TTL_SECONDS: f64 = 2.4;
 /// Base appetite to attempt an available wall pass (scaled by quality, pressure, skill,
-/// goal proximity, and the active maneuver). A give-and-go is genuinely tried, not rare.
-const WALL_PASS_BASE_APPETITE: f64 = 0.30;
+/// goal proximity, and the active maneuver). A give-and-go is genuinely tried, not rare — the
+/// one-two is a primary attacking route, so when a clean combination is on it is taken often.
+const WALL_PASS_BASE_APPETITE: f64 = 0.46;
 /// When the team's active attacking maneuver IS a give-and-go / one-two, the carrier is
 /// looking to combine — lift the appetite hard.
 const WALL_PASS_STRATEGY_APPETITE_BOOST: f64 = 2.1;
@@ -43840,6 +43909,22 @@ fn pass_length_preference(dist: f64) -> f64 {
     (1.0 - (dist - PASS_LENGTH_OPTIMAL_YARDS) / fade_band).clamp(0.0, 1.0)
 }
 
+/// Length preference for a BACKWARD pass. Unlike the forward/lateral curve (which peaks at
+/// the 8yd "optimal" length), a backward ball is safest when it's a SHORT drop: full
+/// preference up to the 5yd short cap, then fading to zero as the retreat lengthens. This
+/// stops the engine treating a long (e.g. 8yd) backward pass as "optimal length".
+fn backward_pass_length_preference(dist: f64) -> f64 {
+    if !dist.is_finite() || dist <= 0.0 {
+        return 0.0;
+    }
+    if dist <= BACKWARD_PASS_SHORT_MAX_YARDS {
+        1.0
+    } else {
+        (1.0 - (dist - BACKWARD_PASS_SHORT_MAX_YARDS) / BACKWARD_PASS_LENGTH_FADE_BAND_YARDS)
+            .clamp(0.0, 1.0)
+    }
+}
+
 fn directional_pass_progress_score(forward_yards: f64, weight: f64) -> f64 {
     if !forward_yards.is_finite() || !weight.is_finite() {
         return 0.0;
@@ -43850,6 +43935,19 @@ fn directional_pass_progress_score(forward_yards: f64, weight: f64) -> f64 {
     } else {
         forward_yards * weight * BACKWARD_PASS_VALUE_MULTIPLIER
     }
+}
+
+/// Escalating demerit for a *long* backward pass. Returns 0 for forward, square, or
+/// short-backward (≤5yd) balls so a 3–5yd reset is untouched, then grows per-yard
+/// (capped) for every yard travelled backward beyond [`LONG_BACKWARD_PASS_YARDS`].
+/// `forward_yards` is signed attacking-direction progress (negative = backward).
+fn long_backward_pass_penalty(forward_yards: f64) -> f64 {
+    if !forward_yards.is_finite() || forward_yards >= 0.0 {
+        return 0.0;
+    }
+    let backward_yards = -forward_yards;
+    ((backward_yards - LONG_BACKWARD_PASS_YARDS).max(0.0) * LONG_BACKWARD_PASS_PENALTY_PER_YARD)
+        .min(LONG_BACKWARD_PASS_PENALTY_MAX)
 }
 
 fn lateral_pass_penalty(forward_yards: f64, aerial: bool) -> f64 {
@@ -45173,7 +45271,9 @@ fn pressure_bucket(nearest_opponent_distance: f64) -> u8 {
     distance_bucket(pressure, &[0.15, 0.35, 0.60, 0.82])
 }
 
-fn default_players(config: &MatchConfig, rng: &mut SeededRandom) -> Vec<PlayerAgent> {
+// `rng` is retained for signature stability; squad skills are now deterministic
+// per shirt (`SkillProfile::for_shirt`), so no randomness is drawn here.
+fn default_players(config: &MatchConfig, _rng: &mut SeededRandom) -> Vec<PlayerAgent> {
     let home_layout = vec![
         (
             "Home GK".to_string(),
@@ -45281,7 +45381,11 @@ fn default_players(config: &MatchConfig, rng: &mut SeededRandom) -> Vec<PlayerAg
                 dizziness: 0.0,
                 anaerobic_load: 0.0,
                 incoming_ball: None,
-                skills: SkillProfile::blended(id, role, rng),
+                // Deterministic, position-only skills: every player is the same
+                // overall standard, shaped by their shirt (1–11) and identical
+                // between the two teams, so neither side starts with a skill edge
+                // and both learn from an equal footing.
+                skills: SkillProfile::for_shirt(shirt, role),
                 fatigue: 0.0,
                 controller_slot: None,
                 preferences,

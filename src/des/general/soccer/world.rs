@@ -4500,8 +4500,15 @@ impl SoccerMatch {
                 || self.tick as usize % interval == 0;
             let capture_full_game =
                 self.config.learning_enabled && self.config.full_game_learning_enabled;
+            // Retrieval capture must retain this episode's transitions itself: the
+            // n-step outcome in `config_moments()` is summed from
+            // `episode_learning_transitions`, so without this a corpus-builder that
+            // enables only `retrieval.capture_enabled` (full-game learning off) would
+            // get silently zeroed outcomes — the "how the decision turned out" signal.
+            let capture_config_moments = self.config.retrieval.capture_enabled;
             let capture_reward_transitions = has_tick_reward_events && !learning_due;
-            if learning_due || capture_full_game || capture_reward_transitions {
+            if learning_due || capture_full_game || capture_config_moments || capture_reward_transitions
+            {
                 let phase_started = Instant::now();
                 let tick_transitions = self.learning_transitions_for(
                     &tick_start_snapshot,
@@ -4511,7 +4518,7 @@ impl SoccerMatch {
                     &self.reward_events[reward_event_start..],
                 );
                 learning_transition_elapsed += phase_started.elapsed();
-                if capture_full_game {
+                if capture_full_game || capture_config_moments {
                     self.episode_learning_transitions
                         .extend(tick_transitions.iter().cloned());
                 }
@@ -4519,7 +4526,7 @@ impl SoccerMatch {
                 // ball carrier's decision this tick (≤1 per tick). The outcome
                 // (n-step return) is attached later by joining with the transition
                 // stream in `config_moments`. Gated off by default.
-                if self.config.retrieval.capture_enabled {
+                if capture_config_moments {
                     if let Some(holder) = tick_start_snapshot.ball.holder {
                         if let Some(carrier) =
                             tick_transitions.iter().find(|t| t.player_id == holder)
@@ -5711,6 +5718,7 @@ impl SoccerMatch {
         &mut self,
         scoring_team: Team,
         shooter: Option<usize>,
+        reward_pool: f64,
     ) -> bool {
         let candidates = self.contextual_goal_credit_candidates(scoring_team, shooter);
         if candidates.len() < GOAL_CONTEXT_CREDIT_MIN_PLAYERS {
@@ -5725,7 +5733,7 @@ impl SoccerMatch {
         }
 
         for candidate in candidates {
-            let amount = GOAL_REWARD_POINTS * candidate.score / total_score;
+            let amount = reward_pool * candidate.score / total_score;
             if !amount.is_finite() || amount <= 1e-9 {
                 continue;
             }
@@ -5744,15 +5752,35 @@ impl SoccerMatch {
         if let Some(shooter) = shooter {
             self.record_possession_touch(shooter);
         }
-        if !self.record_contextual_goal_rewards(scoring_team, shooter) {
+        // A goal scored directly off a turnover earns a reduced reward pool: only a
+        // single scoring-team player touched the ball between winning it and
+        // finishing, so there is no build-up to credit. `possession_chain` holds
+        // only the scoring team's *consecutive* touches (it is cleared whenever the
+        // touching team changes), so a scoring-team chain of length ≤ 1 means the
+        // immediately prior toucher was the other team — a direct-turnover finish.
+        let direct_turnover_goal = self
+            .possession_chain
+            .back()
+            .and_then(|&pid| self.players.get(pid))
+            .is_some_and(|player| player.team == scoring_team)
+            && self.possession_chain.len() <= 1;
+        let goal_reward_pool = if direct_turnover_goal {
+            DIRECT_TURNOVER_GOAL_REWARD_POINTS
+        } else {
+            GOAL_REWARD_POINTS
+        };
+        if !self.record_contextual_goal_rewards(scoring_team, shooter, goal_reward_pool) {
             debug_assert!(
                 (GOAL_CHAIN_REWARD_PATTERN.iter().sum::<f64>() - GOAL_REWARD_POINTS).abs() < 1e-9
             );
-            self.record_possession_reward_pattern(
-                scoring_team,
-                shooter,
-                &GOAL_CHAIN_REWARD_PATTERN,
-            );
+            // Scale the fixed chain pattern to the (possibly reduced) pool so the
+            // relative shares are preserved while the total is 30 vs 100.
+            let pattern_scale = goal_reward_pool / GOAL_REWARD_POINTS;
+            let scaled_pattern: Vec<f64> = GOAL_CHAIN_REWARD_PATTERN
+                .iter()
+                .map(|weight| weight * pattern_scale)
+                .collect();
+            self.record_possession_reward_pattern(scoring_team, shooter, &scaled_pattern);
         }
         self.record_recent_defensive_goal_penalties(scoring_team.other());
     }
@@ -6525,6 +6553,7 @@ impl SoccerMatch {
     /// still releases him at the limit if nothing ever opens up.
     pub(crate) fn keeper_handling_release_is_intelligent(
         &self,
+        snapshot: &WorldSnapshot,
         keeper_id: usize,
         target_id: Option<usize>,
         target_point: Vec2,
@@ -6544,13 +6573,13 @@ impl SoccerMatch {
             .find(|player| player.id == target_id && player.team == team)
             .map(|player| player.position)
             .unwrap_or(target_point);
-        if self.nearest_opponent_distance_at(team, receiver_position)
+        if snapshot.nearest_opponent_distance_at(team, receiver_position)
             < GK_HANDLING_SAFE_OUTLET_MARKING_YARDS
         {
             return false;
         }
         // And no opponent currently sitting in the passing lane (a near-certain cut-out).
-        let (lane_clear_now, _) = self.pass_lane_clearance(
+        let (lane_clear_now, _) = snapshot.pass_lane_clearance(
             keeper.position,
             receiver_position,
             team.other(),
@@ -6598,9 +6627,14 @@ impl SoccerMatch {
             Vec2::new(width * 0.18, from.y + attack_dir * forward).clamp_to_pitch(width, length);
         let right_target =
             Vec2::new(width * 0.82, from.y + attack_dir * forward).clamp_to_pitch(width, length);
-        let clear_target = if self.nearest_opponent_distance_at(team, left_target)
-            >= self.nearest_opponent_distance_at(team, right_target)
-        {
+        let nearest_opponent_to = |point: Vec2| -> f64 {
+            self.players
+                .iter()
+                .filter(|player| player.team == team.other())
+                .map(|player| player.position.distance(point))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let clear_target = if nearest_opponent_to(left_target) >= nearest_opponent_to(right_target) {
             left_target
         } else {
             right_target
@@ -7176,21 +7210,25 @@ impl SoccerMatch {
                     // the ball straight back to a nearby presser (e.g. the player who just
                     // shot), he keeps holding until a genuinely open team-mate appears, up
                     // to the handling limit (then `update_keeper_handling` forces a clear).
-                    if let Some(held) = self.keeper_handling_held_seconds(player_id) {
-                        if held < GK_HANDLING_HOLD_LIMIT_SECONDS
-                            && !self.keeper_handling_release_is_intelligent(
-                                player_id, target_id, target,
-                            )
-                        {
-                            // Survey the field (face the considered outlet) and hold the ball.
-                            let look = target - player_pos;
-                            if look.len() > 1e-6 {
-                                let face = facing_bucket_from_vector(look);
-                                if face != FacingBucket::Unknown {
-                                    self.players[player_id].action_facing = face;
+                    // Skipped on a restart he is taking (a goal kick has its own hold/clear
+                    // rules in `restart_release_action`) — only open-play gathers hold here.
+                    if self.restart_double_touch_guard != Some(player_id) {
+                        if let Some(held) = self.keeper_handling_held_seconds(player_id) {
+                            if held < GK_HANDLING_HOLD_LIMIT_SECONDS
+                                && !self.keeper_handling_release_is_intelligent(
+                                    &snapshot, player_id, target_id, target,
+                                )
+                            {
+                                // Survey the field (face the outlet) and hold the ball.
+                                let look = target - player_pos;
+                                if look.len() > 1e-6 {
+                                    let face = facing_bucket_from_vector(look);
+                                    if face != FacingBucket::Unknown {
+                                        self.players[player_id].action_facing = face;
+                                    }
                                 }
+                                return;
                             }
-                            return;
                         }
                     }
                     let pressure = pressure_from_observation(&observation);
@@ -14961,6 +14999,20 @@ impl WorldSnapshot {
     /// or `None` when the carrier is at a walk/jog, leaving normal containment
     /// intact. Deliberately bypasses the goal-side cushion so the press reaches
     /// the ball; the caller must not re-apply it.
+    /// Depth-scaled pressing urgency for an opponent carrier in our own defensive
+    /// third: 0 at the edge of the third (≥ `field_length / 3` from our goal) ramping
+    /// to 1 just outside our six-yard area (`OWN_GOAL_PRESS_FULL_YARDS`). The closer
+    /// the carrier is to our goal, the more the nearest defender must abandon timid
+    /// containment and step onto the ball — a dribbler walking the ball into our box
+    /// uncontested is worse than the risk of engaging. Returns 0 outside the third, so
+    /// midfield and our shallow half stay on the unchanged contain baseline.
+    pub(crate) fn own_goal_press_urgency(&self, team: Team, carrier: Vec2) -> f64 {
+        let own_goal_y = self.own_goal_y_for(team);
+        let dist = (carrier.y - own_goal_y).abs();
+        let third_edge = self.field_length / 3.0;
+        ((third_edge - dist) / (third_edge - OWN_GOAL_PRESS_FULL_YARDS).max(1e-6)).clamp(0.0, 1.0)
+    }
+
     pub(crate) fn fast_carrier_engage_target_for(&self, me: &PlayerSnapshot) -> Option<Vec2> {
         if me.role == PlayerRole::Goalkeeper {
             return None;
@@ -14982,7 +15034,14 @@ impl WorldSnapshot {
         // Carrier's speed toward our goal (the carrier attacks opposite our own
         // attack direction). Walk/jog stays below the threshold and contains.
         let carrier_goalward_speed = (-(carrier_velocity.y * me.team.attack_dir())).max(0.0);
-        if carrier_goalward_speed < CONTAIN_ENGAGE_CARRIER_SPEED_YPS {
+        // The deeper the carrier is in our own third, the lower the speed at which we
+        // step up: near our goal even a slow dribble toward goal must be contested, not
+        // contained — the whole point is to not let them dribble in uncontested. The
+        // threshold is unchanged at/above the third edge (press_urgency 0).
+        let press_urgency = self.own_goal_press_urgency(me.team, carrier_position);
+        let engage_speed_threshold =
+            CONTAIN_ENGAGE_CARRIER_SPEED_YPS * (1.0 - press_urgency * OWN_GOAL_PRESS_SPEED_RELAX);
+        if carrier_goalward_speed < engage_speed_threshold {
             return None;
         }
         let my_position = self.player_snapshot_position(me);
@@ -15241,7 +15300,13 @@ impl WorldSnapshot {
         let carrier_velocity = self.player_velocity(holder_id).unwrap_or(holder.velocity);
         // Carrier's speed toward OUR goal (opposite our attack direction).
         let goalward = (-(carrier_velocity.y * attack_dir)).max(0.0);
-        if goalward < CARRIER_ADVANCE_MIN_SPEED_YPS {
+        // Deep in our own third even a slow carrier driving at goal must be engaged, so
+        // the "is it advancing?" floor relaxes toward zero as the carrier nears our
+        // goal (unchanged at/above the third edge).
+        let press_urgency = self.own_goal_press_urgency(me.team, carrier_position);
+        let advance_min_speed =
+            CARRIER_ADVANCE_MIN_SPEED_YPS * (1.0 - press_urgency * OWN_GOAL_PRESS_SPEED_RELAX);
+        if goalward < advance_min_speed {
             return 1.0; // not advancing: contain as normal.
         }
         let advance01 = ((goalward - CARRIER_ADVANCE_MIN_SPEED_YPS)
@@ -15259,8 +15324,20 @@ impl WorldSnapshot {
         });
         if has_cover {
             1.0 + advance01 * CARRIER_ADVANCE_STEAL_BOOST
-        } else {
+        } else if press_urgency <= 0.0 {
+            // Outside our third: a lone last defender contains rather than lunging —
+            // a failed steal with no cover lets the carrier clean through.
             CARRIER_NO_COVER_CONTAIN_FACTOR
+        } else {
+            // But the closer the carrier dribbles to our own goal, the less that
+            // caution is affordable: ramp the lone defender from the timid contain
+            // factor up to the same commit it would have WITH cover. The floor keeps
+            // the deep result above 1.0 so the positional step-up (gated > 1.0) also
+            // fires against a slow dribbler walking the ball in.
+            let covered_commit = (1.0 + advance01 * CARRIER_ADVANCE_STEAL_BOOST)
+                .max(1.0 + OWN_GOAL_PRESS_MIN_BOOST);
+            CARRIER_NO_COVER_CONTAIN_FACTOR
+                + press_urgency * (covered_commit - CARRIER_NO_COVER_CONTAIN_FACTOR)
         }
     }
 
@@ -17685,10 +17762,18 @@ impl WorldSnapshot {
                     }
                     _ => 0.0,
                 };
-                // The 8yd length tiebreaker should not make square recycling look optimal.
-                let pass_length_bonus = pass_length_preference(dist)
-                    * PASS_LENGTH_PREFERENCE_WEIGHT
-                    * if forward > 1.25 { 1.0 } else { 0.35 };
+                // The 8yd length tiebreaker should not make square recycling look optimal,
+                // nor a long backward pass: forward/lateral balls use the 8yd-optimal curve,
+                // but a BACKWARD ball uses a short-favouring curve so a 3-5yd drop outscores a
+                // long retreat. (The escalating per-yard demerit for the long retreat itself is
+                // `long_backward_penalty` below.)
+                let pass_length_bonus = if backward {
+                    backward_pass_length_preference(dist) * PASS_LENGTH_PREFERENCE_WEIGHT * 0.35
+                } else {
+                    pass_length_preference(dist)
+                        * PASS_LENGTH_PREFERENCE_WEIGHT
+                        * if forward > 1.25 { 1.0 } else { 0.35 }
+                };
                 // Pressured outlet to the keeper: a defender being closed down may play it
                 // back to the keeper IF the keeper is the MORE OPEN option and a controllable
                 // 8-40yd away (shorter is pointless; longer risks a giveaway across our own
@@ -17759,8 +17844,10 @@ impl WorldSnapshot {
                 } else {
                     0.0
                 };
+                let long_backward_penalty = long_backward_pass_penalty(forward);
                 let score = score + low_cross_policy_bonus
                     - blind_backward_penalty
+                    - long_backward_penalty
                     - lateral_penalty
                     - anticipation_penalty
                     - reception_teammate_penalty
@@ -18022,6 +18109,7 @@ impl WorldSnapshot {
                     + pass_quality.stride_fit * 0.46
                     + keeper_distribution_bonus
                     - blind_backward_penalty
+                    - long_backward_pass_penalty(forward)
                     - lateral_penalty
                     - reception_teammate_penalty;
                 (p.id, score)
@@ -18328,8 +18416,10 @@ impl WorldSnapshot {
         // than holding the staging cadence.
         let urgent_run_invite =
             through_ball_invite || carrier_driving || self.forward_attacking_momentum(me.team);
+        // Widen the neutral-build-up staging cadence so more attackers are timing a run at
+        // any moment (was ~14/41 ticks → ~19/41), giving the holder more forward options.
         let cadence = (self.tick + player_id as u64 * 17) % 41;
-        if cadence > 13 && !urgent_run_invite {
+        if cadence > 18 && !urgent_run_invite {
             return None;
         }
         let current = self.player_snapshot_position(me);
@@ -22845,7 +22935,94 @@ impl WorldSnapshot {
             proposed
         };
         let chosen = self.off_carrier_lane_target(player, chosen);
-        self.defensive_goal_side_target(player, chosen)
+        let chosen = self.defensive_goal_side_target(player, chosen);
+        self.teammate_cross_through_target(player, chosen)
+    }
+
+    /// Position-swap / cross-through guard: stop an off-ball player from steering a
+    /// straight line that carries it PAST a teammate (ending up on the far side of
+    /// them) — the "two players switching positions / running past each other"
+    /// artefact. If the path `current -> target` skims within
+    /// `CROSS_THROUGH_CORRIDOR_HALF_WIDTH_YARDS` of a teammate who sits genuinely
+    /// between the player and the target, the target is truncated to stop just short
+    /// of the nearest such teammate (never going backward). See the
+    /// `CROSS_THROUGH_*` constants for the geometry and the legitimate exemptions
+    /// (man-marking runs, quick exchanges by the ball, overlapping the carrier).
+    fn teammate_cross_through_target(&self, player: &PlayerSnapshot, target: Vec2) -> Vec2 {
+        if player.role == PlayerRole::Goalkeeper {
+            return target;
+        }
+        let current = self.player_snapshot_position(player);
+        let to_target = target - current;
+        let travel = to_target.len();
+        if travel < CROSS_THROUGH_MIN_TRAVEL_YARDS {
+            return target;
+        }
+        let dir = to_target / travel;
+        // Man-marking exemption: a run whose target lands on an opponent is a
+        // tracking run, which is allowed to cross teammates.
+        let target_is_mark = self
+            .players
+            .iter()
+            .filter(|p| p.team == player.team.other())
+            .any(|p| {
+                self.player_snapshot_position(p).distance(target)
+                    <= CROSS_THROUGH_MARK_RADIUS_YARDS
+            });
+        if target_is_mark {
+            return target;
+        }
+        // Quick-exchange exemption: handoffs / give-and-gos happen tight to the ball.
+        let ball = self.ball.position;
+        if current.distance(ball) <= CROSS_THROUGH_BALL_EXCHANGE_YARDS
+            || target.distance(ball) <= CROSS_THROUGH_BALL_EXCHANGE_YARDS
+        {
+            return target;
+        }
+        let mut nearest_along = f64::INFINITY;
+        for mate in self.players.iter() {
+            if mate.id == player.id
+                || mate.team != player.team
+                || mate.role == PlayerRole::Goalkeeper
+            {
+                continue;
+            }
+            // Overlapping / running past the ball carrier is a real attacking move.
+            if self.ball.holder == Some(mate.id) {
+                continue;
+            }
+            // Only a MOVING teammate is part of a "running past each other" swap; a
+            // stationary one standing in the line to open space is the spacing
+            // score's job to route around, not ours to truncate against.
+            if self.player_velocity(mate.id).unwrap_or(mate.velocity).len()
+                < CROSS_THROUGH_MATE_MIN_SPEED_YPS
+            {
+                continue;
+            }
+            let rel = self.player_snapshot_position(mate) - current;
+            let along = rel.dot(dir);
+            // The teammate must be genuinely BETWEEN us and the target: far enough
+            // up the path to be in the way, and the target beyond them by a margin
+            // (so this is a swap, not merely arriving alongside them).
+            if along <= CROSS_THROUGH_MIN_AHEAD_YARDS
+                || along >= travel - CROSS_THROUGH_BEYOND_MARGIN_YARDS
+            {
+                continue;
+            }
+            let lateral = (rel - dir * along).len();
+            if lateral > CROSS_THROUGH_CORRIDOR_HALF_WIDTH_YARDS {
+                continue;
+            }
+            if along < nearest_along {
+                nearest_along = along;
+            }
+        }
+        if !nearest_along.is_finite() {
+            return target;
+        }
+        // Truncate to stop just short of the blocking teammate, never backward.
+        let stop = (nearest_along - CROSS_THROUGH_STOP_SHORT_YARDS).max(0.0);
+        (current + dir * stop).clamp_to_pitch(self.field_width, self.field_length)
     }
 
     pub(crate) fn space_score_at(&self, p: Vec2, team: Team) -> f64 {
