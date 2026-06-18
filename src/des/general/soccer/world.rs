@@ -7674,6 +7674,33 @@ impl SoccerMatch {
         }
         let player_pos = self.players[player_id].position;
         let player_team = self.players[player_id].team;
+        // First-touch settle gate: a holder is the ball's owner (`has_ball`) the
+        // instant control is won, but a ball won from a stretched trap is still 1.4–2.8yd
+        // out being drawn to the feet over ~2 ticks (see CONTROL_FIRST_TOUCH_SETTLE_*).
+        // Striking it in that window launched the ball from out there (or teleported it
+        // onto the feet first) — a "ghost kick" with no player visibly at the ball. Until
+        // the ball has settled within strike reach, downgrade any ball-RELEASE to a
+        // settling touch: step onto the ball and keep possession; `sync_held_ball_to_holder`
+        // draws it smoothly to the feet, and the strike fires cleanly a tick later.
+        if self.ball.holder == Some(player_id)
+            && matches!(
+                intent.action,
+                SoccerAction::Pass { .. }
+                    | SoccerAction::Clearance { .. }
+                    | SoccerAction::RouteOne { .. }
+                    | SoccerAction::Shoot { .. }
+            )
+            && player_pos.distance(self.ball.position) > CONTROLLED_STRIKE_REACH_YARDS
+        {
+            let ball_pos = self.ball.position;
+            self.move_player_towards(player_id, ball_pos, false);
+            let settle_facing =
+                facing_bucket_from_vector(ball_pos - self.players[player_id].position);
+            if settle_facing != FacingBucket::Unknown {
+                self.players[player_id].action_facing = settle_facing;
+            }
+            return;
+        }
         match intent.action {
             SoccerAction::HoldShape => {
                 let target = self.players[player_id].home_position;

@@ -647,6 +647,77 @@ fn mpc_pass_execution_prices_lane_and_ball_recipe() {
 }
 
 #[test]
+fn holder_cannot_strike_ball_during_first_touch_settle() {
+    // Regression ("a ghost kicked the ball"): a player who has just won a loose ball
+    // is its `holder` immediately, but a ball won from a stretched trap is still
+    // 1.4–2.8yd out being drawn to the feet over the first-touch settle. Striking it
+    // in that window launched the ball from out there with no player visibly at it.
+    // The strike must wait until the ball has settled within reach.
+    let mut sim = SoccerMatch::default_11v11(MatchConfig {
+        duration_seconds: 0.1,
+        seed: 4_242,
+        ..Default::default()
+    });
+    let passer = 7;
+    let receiver = 9;
+    park_players_except(&mut sim, &[passer, receiver]);
+    sim.players[passer].position = Vec2::new(40.0, 58.0);
+    sim.players[passer].home_position = sim.players[passer].position;
+    sim.players[receiver].team = Team::Home;
+    sim.players[receiver].position = Vec2::new(40.0, 74.0);
+    sim.ball.holder = Some(passer);
+    sim.ball.last_touch_team = Some(Team::Home);
+
+    let pass = SoccerAction::Pass {
+        target_player: Some(receiver),
+        power: 0.7,
+        flight: PassFlight::Floor,
+    };
+
+    // Ball still ~2yd from the holder's feet (mid-settle): the strike is gated — the
+    // holder keeps possession and the ball is NOT launched.
+    sim.ball.position = sim.players[passer].position + Vec2::new(0.0, 2.0);
+    sim.ball.velocity = Vec2::zero();
+    sim.apply_player_intent(PlayerIntent {
+        player_id: passer,
+        action: pass.clone(),
+        sprint: false,
+    });
+    assert_eq!(
+        sim.ball.holder,
+        Some(passer),
+        "holder must keep the ball while it is still settling to the feet"
+    );
+    assert!(
+        sim.ball.velocity.len() < 1.0,
+        "ball must not be struck mid-settle (ghost kick); v = {:?}",
+        sim.ball.velocity
+    );
+    assert!(
+        sim.pending_pass.is_none(),
+        "no pass should have launched mid-settle"
+    );
+
+    // Ball now settled at the feet: the same strike releases normally.
+    sim.ball.position = sim.players[passer].position + Vec2::new(0.0, 0.4);
+    sim.ball.velocity = Vec2::zero();
+    sim.apply_player_intent(PlayerIntent {
+        player_id: passer,
+        action: pass,
+        sprint: false,
+    });
+    assert_eq!(
+        sim.ball.holder, None,
+        "a settled ball at the feet must be released by a strike"
+    );
+    assert!(
+        sim.ball.velocity.len() > 1.0,
+        "a settled strike must launch the ball; v = {:?}",
+        sim.ball.velocity
+    );
+}
+
+#[test]
 fn mpc_dribble_execution_distinguishes_left_and_right_feints() {
     let mut sim = SoccerMatch::default_11v11(MatchConfig {
         duration_seconds: 0.1,

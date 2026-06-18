@@ -83,6 +83,16 @@ const PLAYER_CONTROL_RADIUS_YARDS: f64 = 1.55;
 // settles to the feet over ~2 ticks (a realistic first touch). Comfortably above
 // the dribble carry lead (0.92yd) so ordinary carrying tracks the feet exactly.
 const CONTROL_FIRST_TOUCH_SETTLE_MAX_STEP_YARDS: f64 = 1.4;
+// Maximum ball-to-feet distance at which a holder may STRIKE the ball (pass, shoot,
+// clear, route-one). During the first-touch settle above, the holder is the ball's
+// owner (`has_ball`) while the ball is still 1.4–2.8yd out being drawn in. Letting
+// them strike in that window launched the ball from out there / teleported it onto
+// the feet first — a "ghost kick" with no player visibly at the ball. A strike is
+// only legal once the ball has settled to within this reach; until then the holder
+// takes a settling touch. Set above the dribble carry lead (0.92yd) and orbit max
+// (1.10yd) so ordinary carrying/dribbling release is never blocked, but below the
+// settle-window distances so a not-yet-controlled ball can't be booted.
+const CONTROLLED_STRIKE_REACH_YARDS: f64 = 1.6;
 // Physical reach caps for contesting a moving ball. A fast ball that only nicks
 // the skill-based control radius is unreachable: a player can close at most a
 // lunge (`INTERCEPT_LUNGE_REACH_YARDS`) plus the ground they cover while the ball
