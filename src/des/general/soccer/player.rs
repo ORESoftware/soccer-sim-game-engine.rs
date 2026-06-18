@@ -6173,8 +6173,16 @@ impl PlayerAgent {
                     .collect(),
                 rng,
             );
-            let should_recover =
-                fifty_fifty_duel || action_option_score(&loose_options, "recover") > 0.0;
+            // A defender genuinely placed to cut an in-flight ground pass on its lane ALWAYS
+            // steps to intercept — it is not subject to the anti-swarm "recover" legality cap
+            // (closer-teammates), which otherwise let a ground pass roll right past a defender
+            // 1–3yd off the lane while it deferred to a team-mate and held shape. `loose_ball_target`
+            // already resolves to the lane cut-point for such a player.
+            let lane_interceptor = self.role != PlayerRole::Goalkeeper
+                && snapshot.pending_pass_lane_cut_target_for(self.id).is_some();
+            let should_recover = lane_interceptor
+                || fifty_fifty_duel
+                || action_option_score(&loose_options, "recover") > 0.0;
             action_options = loose_options;
             order_names.extend(loose_order);
             if should_recover {

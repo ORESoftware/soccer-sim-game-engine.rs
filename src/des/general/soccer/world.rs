@@ -9633,7 +9633,24 @@ impl SoccerMatch {
             } = &outcome
             {
                 let (holder, holder_team) = (*holder, *holder_team);
-                handled = self.try_aerial_header(holder, holder_team, control_altitude);
+                // A header/flick is still a controlling touch. The in-flight interference
+                // check above excludes the segment endpoint (the control point), and a
+                // handled header SKIPS `apply_ball_outcome` (and its at-control offside
+                // check) — so whistle an attacker who was offside when the ball was played
+                // and is the one now meeting it in the air, BEFORE the header runs.
+                if let Some(offside) = self
+                    .effective_offside_candidates()
+                    .into_iter()
+                    .find(|offside| offside.target == holder && offside.team == holder_team)
+                {
+                    self.pending_pass = None;
+                    self.ball.untargeted_long_ball_flight = None;
+                    self.ball.untargeted_long_ball_launcher = None;
+                    self.call_offside(offside);
+                    handled = true;
+                } else {
+                    handled = self.try_aerial_header(holder, holder_team, control_altitude);
+                }
             }
         }
         if !handled {
@@ -21504,6 +21521,63 @@ impl WorldSnapshot {
             .clamp_to_pitch(self.field_width, self.field_length)
     }
 
+    /// If a ground pass is IN FLIGHT and `player_id` is an opponent of the passer who can
+    /// genuinely reach the ball's lane before it passes, returns the foot-of-perpendicular
+    /// on the lane that the defender should step to in order to cut the ball out. `None`
+    /// otherwise (aerial ball, no pending pass, the passing team — who keep their support
+    /// shape — or a defender too far off the lane to make the cut).
+    ///
+    /// This is the heart of the "don't let a ground pass roll past you" behaviour. The
+    /// step-in is gated by the SAME reach model the physics resolver uses (mirrors
+    /// `pass_lane_clearance` / `nearest_ball_controller_for_segment`): the defender commits
+    /// only when they can reach their nearest point on the lane before the ball passes it,
+    /// so the decision predicts exactly the cut-outs the simulation allows and a defender
+    /// too far off the lane is never dragged out of shape. Because it is gated to OPPONENTS
+    /// of the passer only, the passing team's off-ball players never jump in front of their
+    /// own intended receiver (who meets the ball via `pending_pass_reception_target_for`).
+    ///
+    /// Returning `Some` here also marks the player as a committed lane interceptor, which
+    /// exempts them from the loose-ball anti-swarm peel-off and the teammate-spacing nudge:
+    /// a defender perfectly placed to step across the lane must NOT be told to retreat
+    /// goalside just because a team-mate scored marginally closer to that same lane point.
+    pub(crate) fn pending_pass_lane_cut_target_for(&self, player_id: usize) -> Option<Vec2> {
+        let pass = self.pending_pass.as_ref()?;
+        if self.ball.holder.is_some() || pass.flight.is_aerial() {
+            return None;
+        }
+        let me = self.players.iter().find(|p| p.id == player_id)?;
+        if me.team == pass.team || me.role == PlayerRole::Goalkeeper {
+            return None;
+        }
+        let from = self.ball.position;
+        let lane = pass.intended_target - from;
+        let lane_len = lane.len();
+        if lane_len <= 1e-3 {
+            return None;
+        }
+        let dir = lane * (1.0 / lane_len);
+        let me_pos = self.player_snapshot_position(me);
+        let along = (me_pos - from).dot(dir).clamp(0.0, lane_len);
+        if along <= 1e-3 {
+            return None;
+        }
+        let lane_point = from + dir * along;
+        let perp_gap = me_pos.distance(lane_point);
+        let speed = self.ball.velocity.len().max(1.0);
+        let t_ball = along / speed;
+        let sprint_speed = player_top_speed_yps(me.role, &me.skills)
+            * fatigue_speed_factor(me.skills.stamina, me.fatigue)
+            * MovementGait::Sprint.speed_multiplier();
+        let intercept_window = (t_ball - PASS_LANE_INTERCEPT_REACTION_SECONDS)
+            .clamp(0.0, PASS_LANE_INTERCEPT_MAX_WINDOW_SECONDS);
+        let reach = INTERCEPT_LUNGE_REACH_YARDS + sprint_speed * intercept_window;
+        if perp_gap <= reach {
+            Some(lane_point.clamp_to_pitch(self.field_width, self.field_length))
+        } else {
+            None
+        }
+    }
+
     /// The point a designated retriever ATTACKS to win a loose ball — an early
     /// interception point along the roll (cut harder when an opponent is bearing
     /// down), or the projected landing of a deliberate long ball. This is the raw
@@ -21517,49 +21591,8 @@ impl WorldSnapshot {
         // a pass is pending, so without this a defender a yard or two off the trajectory is
         // told to chase where the ball already WAS and "lets it roll" past — the live bug
         // where nearby players never make the effort to intercept a ground pass.
-        //
-        // Only an OPPONENT of the passer is diverted: the passing team's off-ball players keep
-        // their support shape (they must not jump in front of their own intended receiver, who
-        // meets the ball via `pending_pass_reception_target_for` and never reaches this path).
-        // The step-in is gated by the SAME reach model the physics resolver uses (mirrors
-        // `pass_lane_clearance` / `nearest_ball_controller_for_segment`): the defender commits
-        // only when they can reach their nearest point on the lane before the ball passes it,
-        // so the decision predicts exactly the cut-outs the simulation allows and a defender
-        // too far off the lane is never dragged out of shape.
-        if let Some(pass) = self.pending_pass.as_ref() {
-            if self.ball.holder.is_none() && !pass.flight.is_aerial() {
-                if let Some(me) = self.players.iter().find(|p| p.id == player_id) {
-                    if me.team != pass.team && me.role != PlayerRole::Goalkeeper {
-                        let from = self.ball.position;
-                        let to = pass.intended_target;
-                        let lane = to - from;
-                        let lane_len = lane.len();
-                        if lane_len > 1e-3 {
-                            let dir = lane * (1.0 / lane_len);
-                            let me_pos = self.player_snapshot_position(me);
-                            let along = (me_pos - from).dot(dir).clamp(0.0, lane_len);
-                            if along > 1e-3 {
-                                let lane_point = from + dir * along;
-                                let perp_gap = me_pos.distance(lane_point);
-                                let speed = self.ball.velocity.len().max(1.0);
-                                let t_ball = along / speed;
-                                let sprint_speed = player_top_speed_yps(me.role, &me.skills)
-                                    * fatigue_speed_factor(me.skills.stamina, me.fatigue)
-                                    * MovementGait::Sprint.speed_multiplier();
-                                let intercept_window = (t_ball
-                                    - PASS_LANE_INTERCEPT_REACTION_SECONDS)
-                                    .clamp(0.0, PASS_LANE_INTERCEPT_MAX_WINDOW_SECONDS);
-                                let reach =
-                                    INTERCEPT_LUNGE_REACH_YARDS + sprint_speed * intercept_window;
-                                if perp_gap <= reach {
-                                    return lane_point
-                                        .clamp_to_pitch(self.field_width, self.field_length);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if let Some(lane_point) = self.pending_pass_lane_cut_target_for(player_id) {
+            return lane_point;
         }
         let projected = self
             .projected_loose_ball_target()
@@ -21604,6 +21637,14 @@ impl WorldSnapshot {
         if me.role == PlayerRole::Goalkeeper {
             return false;
         }
+        // A defender genuinely placed to cut an in-flight ground pass on its lane is ALWAYS a
+        // committed chaser — it is stepping AT the ball, so the spacing nudge must leave it
+        // alone (and it is exempt from the anti-swarm peel-off below). It does not have to win
+        // the retriever election to count: several defenders may legitimately converge on
+        // different points of the same lane.
+        if self.pending_pass_lane_cut_target_for(player_id).is_some() {
+            return true;
+        }
         let target = self.loose_ball_contest_target_for(player_id);
         let contesters = self.loose_ball_contester_count(me, target);
         self.is_among_closest_loose_ball_retrievers(player_id, target, contesters)
@@ -21615,6 +21656,15 @@ impl WorldSnapshot {
                 .projected_loose_ball_target()
                 .unwrap_or(self.ball.position)
                 .clamp_to_pitch(self.field_width, self.field_length);
+        }
+        // A defender placed to cut an in-flight ground pass steps onto the lane regardless of
+        // the anti-swarm retriever election: it must NOT peel off goalside just because a
+        // team-mate scored marginally closer to that same lane point — that was the live gap
+        // where a ground pass rolled right past a defender 1–3yd off the lane and nobody
+        // contested it. The cut is opponent-only and physically reach-gated, so it does not
+        // drag players out of shape.
+        if let Some(lane_point) = self.pending_pass_lane_cut_target_for(player_id) {
+            return lane_point;
         }
         let target = self.loose_ball_contest_target_for(player_id);
         let Some(player) = self.players.iter().find(|player| player.id == player_id) else {
