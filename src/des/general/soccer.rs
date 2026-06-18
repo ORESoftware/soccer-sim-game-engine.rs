@@ -32,6 +32,9 @@ use crate::des::general::neural_network::{
     ActivationName, DenseLayerConfig, FeedForwardNetwork, RandomNetworkSpec,
 };
 use crate::des::general::prng::{mulberry32, SeededRandom};
+// `RandomSource` brings `.next_float()` etc. into scope for `SeededRandom`; re-exported here so
+// child modules (`world`, `player`) reach it via `use super::*`.
+use crate::des::shared::capabilities::RandomSource;
 use crate::des::general::qp::{solve_qp_active_set, QPOptions, QPStatus, QuadraticProgram};
 use crate::des::general::soccer_genome::{PITCH_GENOME_LANES, PITCH_GENOME_ROWS};
 mod referee;
@@ -3323,7 +3326,13 @@ fn role_vertical_lane_range(
         )
     };
     match role {
-        PlayerRole::Forward => (0, VERTICAL_LANE_COUNT.saturating_sub(1)),
+        // Forwards keep their freedom to drift and make runs, but not across the
+        // WHOLE pitch: a generous home-centred band (±3 of 12 lanes ≈ ±20yd) lets a
+        // striker work the centre and both half-spaces while still stopping it from
+        // wandering onto the opposite touchline and emptying the team's width. This is
+        // a containment guardrail only — forwards still carry no positive lane prior
+        // pulling them to a home channel (see `dynamic_lane_affinity_for_player_target`).
+        PlayerRole::Forward => centered_band(3),
         PlayerRole::Defender if in_possession => centered_band(2),
         PlayerRole::Defender => centered_band(1),
         PlayerRole::Midfielder if in_possession => centered_band(2),
@@ -3338,11 +3347,20 @@ fn role_vertical_lane_commitment(role: PlayerRole, in_possession: bool) -> f64 {
     // per-player lane affinity lives in `dynamic_lane_affinity_for_player_target`.
     match role {
         PlayerRole::Goalkeeper => 1.0,
-        PlayerRole::Defender if in_possession => 0.48,
+        // In possession the team must STRETCH the pitch, not collapse onto the ball:
+        // hold the width lane more firmly than before (was 0.48 / 0.45). This is still
+        // a soft blend (it only engages once a player has drifted clear OUTSIDE its
+        // ~13yd in-possession band) so coverage drift inside the lane is free.
+        PlayerRole::Defender if in_possession => 0.62,
         PlayerRole::Defender => 0.92,
-        PlayerRole::Midfielder if in_possession => 0.45,
+        PlayerRole::Midfielder if in_possession => 0.60,
         PlayerRole::Midfielder => 0.90,
-        PlayerRole::Forward => 0.0,
+        // A light containment pull for forwards: enough to keep the lane clamp/penalty
+        // alive against a cross-pitch drift (commitment must be > 0 to engage at all),
+        // but well below the 0.65 hard-lock threshold and eroded by genuine attacking
+        // runs (`offensive_high_speed_run_relief`), so striker movement stays free.
+        PlayerRole::Forward if in_possession => 0.24,
+        PlayerRole::Forward => 0.40,
     }
 }
 
