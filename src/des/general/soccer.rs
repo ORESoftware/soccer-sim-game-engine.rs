@@ -49,6 +49,10 @@ mod config_vector;
 pub use config_vector::*;
 mod inspect;
 pub use inspect::*;
+mod labels;
+pub use labels::*;
+mod tunables;
+pub use tunables::*;
 
 pub const DEFAULT_DT_SECONDS: f64 = 1.0 / 15.0;
 /// Convert a real-world duration in seconds to a whole number of simulation ticks at the
@@ -8612,197 +8616,23 @@ impl SoccerTeamQPolicies {
 }
 
 fn normalize_soccer_action_label(action: &str) -> &str {
-    match action {
-        "move" => "space",
-        "pass1" | "pass2" | "pass3" => "pass",
-        "aerial-pass1" | "aerial-pass2" | "aerial-pass3" => "aerial-pass",
-        "wall-pass" | "wall_pass" | "wallpass" | "give-and-go" | "give_and_go" | "giveandgo"
-        | "one-two-pass" | "one_two_pass" | "onetwopass" => "wall-pass",
-        "corner-flag-cross"
-        | "corner_flag_cross"
-        | "cornerflagcross"
-        | "byline-cross"
-        | "byline_cross"
-        | "bylinecross"
-        | "penalty-spot-cross"
-        | "penalty_spot_cross"
-        | "penaltyspotcross" => "corner-flag-cross",
-        "vertical-attack"
-        | "vertical_attack"
-        | "verticalattack"
-        | "support-push-up"
-        | "supportpushup"
-        | "support_push_up"
-        | "pushup"
-        | "push-up"
-        | "attack-vertical"
-        | "attack_vertical"
-        | "drive-forward"
-        | "drive_forward"
-        | "driveforward" => "vertical-attack",
-        "vacate-space"
-        | "vacate_space"
-        | "vacatespace"
-        | "create-space-run"
-        | "create_space_run"
-        | "createspacerun"
-        | "decoy-run"
-        | "decoy_run"
-        | "decoyrun" => "vacate-space",
-        "surprise-pass"
-        | "surprise_pass"
-        | "surprisepass"
-        | "backheel-pass"
-        | "backheel_pass"
-        | "backheelpass"
-        | "backheel" => "surprise-pass",
-        "scoop-pass"
-        | "scoop_pass"
-        | "scooppass"
-        | "lob"
-        | "lob-pass"
-        | "lob_pass"
-        | "lobpass"
-        | "chip-pass"
-        | "chip_pass"
-        | "chippass" => "scoop-pass",
-        "flick-on" | "flick_on" | "flickon" | "header-flick" | "header_flick" => "flick-on",
-        "turnover-burst"
-        | "turnover_burst"
-        | "turnoverburst"
-        | "transition-burst"
-        | "transition_burst"
-        | "counter-burst"
-        | "counter_burst"
-        | "counterburst" => "turnover-burst",
-        "switch"
-        | "switch_play"
-        | "switchplay"
-        | "side-switch"
-        | "side_switch"
-        | "cross-field-pass"
-        | "cross_field_pass"
-        | "crossfieldpass" => "switch-play",
-        "recycle"
-        | "recycle_reset"
-        | "recyclereset"
-        | "reset-pass"
-        | "reset_pass"
-        | "short-reset"
-        | "short_reset"
-        | "backward-reset"
-        | "backward_reset" => "recycle-reset",
-        "press-cover" | "press_cover" | "presscover" | "cover-press" | "cover_press" => {
-            "press-cover"
-        }
-        "slide-tackle" | "slide_tackle" | "slidetackle" | "slide" | "sliding-tackle"
-        | "sliding_tackle" | "slide-challenge" => "slide-tackle",
-        "killer" | "killer_pass" | "killerpass" | "through-pass" | "through_pass"
-        | "throughpass" | "threaded-pass" | "threaded_pass" | "threadedpass" => "killer-pass",
-        "low-cross"
-        | "low_cross"
-        | "lowcross"
-        | "flank-low-cross"
-        | "flank_low_cross"
-        | "flanklowcross"
-        | "down-flank-low-cross"
-        | "down_flank_low_cross"
-        | "downflanklowcross"
-        | "play-down-flank-low-cross"
-        | "play_down_flank_low_cross"
-        | "playdownflanklowcross" => "flank-low-cross",
-        "high-cross"
-        | "high_cross"
-        | "highcross"
-        | "cross-for-header"
-        | "cross_for_header"
-        | "crossforheader"
-        | "high-cross-header"
-        | "high_cross_header"
-        | "highcrossheader"
-        | "flank-high-cross"
-        | "flank_high_cross"
-        | "flankhighcross"
-        | "flank-high-cross-header"
-        | "flank_high_cross_header"
-        | "flankhighcrossheader"
-        | "down-flank-high-cross"
-        | "down_flank_high_cross"
-        | "downflankhighcross"
-        | "play-down-flank-high-cross"
-        | "play_down_flank_high_cross"
-        | "playdownflankhighcross" => "flank-high-cross",
-        "route1" | "route-1" | "long-ball" | "longball" => "route-one",
-        "hoof" | "hoofed-clearance" => "clearance",
-        "header" => "first-time-header",
-        "one-touch-shot" | "one_touch_shot" | "onetouchshot" | "1-touch-shot" | "1touchshot"
-        | "first-touch-shot" | "first_touch_shot" | "firsttouchshot" => "first-time-shot",
-        "one-touch-pass" | "one_touch_pass" | "onetouchpass" | "1-touch-pass" | "1touchpass"
-        | "first-touch-pass" | "first_touch_pass" | "firsttouchpass" => "first-time-pass",
-        "chest-control" => "control-touch",
-        "sidestep" | "side_step" | "side-step-dribble" | "sidestep-dribble" => "side-step",
-        "hold-up" | "holdup" | "hold_up" | "hold-up-dribble" | "hold-up-flank-dribble" => {
-            "hold-up-flank"
-        }
-        "carry"
-        | "carryforward"
-        | "carry_forward"
-        | "carry-forward-dribble"
-        | "dribble-forward" => "carry-forward",
-        "carry-out" | "carryout" | "carry_out" | "carry-out-dribble" | "dribble-out" => {
-            "carry-out-left"
-        }
-        "carryoutleft" | "carry_out_left" | "carry-left" | "carry_left" => "carry-out-left",
-        "carryoutright" | "carry_out_right" | "carry-right" | "carry_right" => "carry-out-right",
-        "protect" | "protectball" | "protect_ball" | "shield" | "shield-ball" | "shield_ball"
-        | "body-shield" => "protect-ball",
-        "leftcut" | "left_cut" | "left-cut-dribble" | "cut-left" => "left-cut",
-        "rightcut" | "right_cut" | "right-cut-dribble" | "cut-right" => "right-cut",
-        "nut-meg" | "nut_meg" | "meg" => "nutmeg",
-        "fake_left_cut_right" | "fake-left-right" | "fake-left-cut-right-dribble" => {
-            "fake-left-cut-right"
-        }
-        "fake_right_cut_left" | "fake-right-left" | "fake-right-cut-left-dribble" => {
-            "fake-right-cut-left"
-        }
-        "supportshape" | "support_shape" => "support-shape",
-        "supportroam" | "support_roam" => "support-roam",
-        "checktoball" | "check_to_ball" | "check-ball" | "checkrun" => "check-to-ball",
-        "runinbehind" | "run_in_behind" | "inbehind" | "in-behind" => "run-in-behind",
-        "exploitspace"
-        | "exploit_space"
-        | "exploit-space"
-        | "exploitspacerun"
-        | "exploit_space_run"
-        | "space-run"
-        | "space_run" => "exploit-space-run",
-        "wideoutlet" | "wide_outlet" | "touchlineoutlet" | "touchline-outlet" => "wide-outlet",
-        "shotcreationrun" | "shot_creation_run" | "shootingrun" | "shooting-run" => {
-            "shot-creation-run"
-        }
-        "overlap" | "overlaprun" | "overlap_run" => "overlap-run",
-        "supportscreen" | "support_screen" | "screenrun" | "screen-run" => "support-screen",
-        other => other,
-    }
+    // Alias -> canonical mapping is centralised in `SoccerActionLabel`
+    // (soccer/labels.rs). Unrecognised labels pass straight through with no
+    // allocation, exactly as the old `other => other` arm did.
+    SoccerActionLabel::canonical_str(action).unwrap_or(action)
 }
 
-const FLANK_CROSS_MIN_FLANK_SCORE: f64 = 0.52;
-const FLANK_CROSS_MAX_YARDS_TO_GOAL: f64 = 54.0;
+// FLANK_CROSS_MIN_FLANK_SCORE / FLANK_CROSS_MAX_YARDS_TO_GOAL moved to
+// `tunables().flank_cross` (env/Postgres-overridable). See soccer/tunables.rs.
 const FLANK_OVERLAP_MIN_OPTION_SHARE: f64 = 1.0 / 3.0;
 
 fn pass_like_action_flight(action: &str) -> Option<PassFlight> {
-    match normalize_soccer_action_label(action) {
-        "pass"
-        | "first-time-pass"
-        | "flank-low-cross"
-        | "wall-pass"
-        | "corner-flag-cross"
-        | "surprise-pass"
-        | "killer-pass"
-        | "switch-play"
-        | "recycle-reset" => Some(PassFlight::Floor),
-        "scoop-pass" => Some(PassFlight::Scoop),
-        "aerial-pass" | "flank-high-cross" | "flick-on" => Some(PassFlight::Aerial),
+    use SoccerActionLabel::*;
+    match SoccerActionLabel::classify(action)? {
+        Pass | FirstTimePass | FlankLowCross | WallPass | CornerFlagCross | SurprisePass
+        | KillerPass | SwitchPlay | RecycleReset => Some(PassFlight::Floor),
+        ScoopPass => Some(PassFlight::Scoop),
+        AerialPass | FlankHighCross | FlickOn => Some(PassFlight::Aerial),
         _ => None,
     }
 }
@@ -8812,13 +8642,15 @@ fn flank_cross_context_score(
     player_position: Vec2,
     field_width_yards: f64,
 ) -> f64 {
+    let cfg = &tunables().flank_cross;
     let flank = flank_lane_score(player_position, field_width_yards).clamp(0.0, 1.0);
     let attacking_depth =
-        (1.0 - observation.yards_to_goal / FLANK_CROSS_MAX_YARDS_TO_GOAL).clamp(0.0, 1.0);
-    let pressure_release = (observation.perceived_pressure * 0.35
-        + observation.pressure_urgency * 0.25)
-        .clamp(0.0, 0.40);
-    (flank * 0.62 + attacking_depth * 0.30 + pressure_release).clamp(0.0, 1.0)
+        (1.0 - observation.yards_to_goal / cfg.max_yards_to_goal).clamp(0.0, 1.0);
+    let pressure_release = (observation.perceived_pressure * cfg.perceived_pressure_weight
+        + observation.pressure_urgency * cfg.pressure_urgency_weight)
+        .clamp(0.0, cfg.pressure_release_cap);
+    (flank * cfg.flank_weight + attacking_depth * cfg.attacking_depth_weight + pressure_release)
+        .clamp(0.0, 1.0)
 }
 
 fn flank_cross_context_is_legal(
@@ -8826,43 +8658,37 @@ fn flank_cross_context_is_legal(
     player_position: Vec2,
     field_width_yards: f64,
 ) -> bool {
+    let cfg = &tunables().flank_cross;
     observation.has_ball
-        && observation.yards_to_goal <= FLANK_CROSS_MAX_YARDS_TO_GOAL
+        && observation.yards_to_goal <= cfg.max_yards_to_goal
         && flank_lane_score(player_position, field_width_yards).clamp(0.0, 1.0)
-            >= FLANK_CROSS_MIN_FLANK_SCORE
+            >= cfg.min_flank_score
 }
 
 fn is_attacking_support_action_label(action: &str) -> bool {
+    use SoccerActionLabel::*;
     matches!(
-        normalize_soccer_action_label(action),
-        "space"
-            | "support-shape"
-            | "support-roam"
-            | "check-to-ball"
-            | "run-in-behind"
-            | "exploit-space-run"
-            | "wide-outlet"
-            | "shot-creation-run"
-            | "overlap-run"
-            | "support-push-up"
-            | "support-screen"
-            | "vertical-attack"
-            | "vacate-space"
-            | "one-two-run"
+        SoccerActionLabel::classify(action),
+        Some(
+            Space | SupportShape | SupportRoam | CheckToBall | RunInBehind | ExploitSpaceRun
+                | WideOutlet | ShotCreationRun | OverlapRun | SupportScreen | VerticalAttack
+                | VacateSpace | OneTwoRun
+        )
     )
 }
 
 fn dribble_move_kind_for_action_label(action: &str) -> Option<DribbleMoveKind> {
-    match normalize_soccer_action_label(action) {
-        "left-cut" | "side-step" | "dribble" | "hold-up-flank" => Some(DribbleMoveKind::LeftCut),
-        "carry-forward" | "vertical-attack" | "turnover-burst" => Some(DribbleMoveKind::CarryForward),
-        "protect-ball" => Some(DribbleMoveKind::ProtectBall),
-        "right-cut" => Some(DribbleMoveKind::RightCut),
-        "nutmeg" => Some(DribbleMoveKind::Nutmeg),
-        "carry-out-left" => Some(DribbleMoveKind::CarryOutLeft),
-        "carry-out-right" => Some(DribbleMoveKind::CarryOutRight),
-        "fake-left-cut-right" => Some(DribbleMoveKind::FakeLeftCutRight),
-        "fake-right-cut-left" => Some(DribbleMoveKind::FakeRightCutLeft),
+    use SoccerActionLabel::*;
+    match SoccerActionLabel::classify(action)? {
+        LeftCut | SideStep | Dribble | HoldUpFlank => Some(DribbleMoveKind::LeftCut),
+        CarryForward | VerticalAttack | TurnoverBurst => Some(DribbleMoveKind::CarryForward),
+        ProtectBall => Some(DribbleMoveKind::ProtectBall),
+        RightCut => Some(DribbleMoveKind::RightCut),
+        Nutmeg => Some(DribbleMoveKind::Nutmeg),
+        CarryOutLeft => Some(DribbleMoveKind::CarryOutLeft),
+        CarryOutRight => Some(DribbleMoveKind::CarryOutRight),
+        FakeLeftCutRight => Some(DribbleMoveKind::FakeLeftCutRight),
+        FakeRightCutLeft => Some(DribbleMoveKind::FakeRightCutLeft),
         _ => None,
     }
 }
@@ -9041,44 +8867,41 @@ fn probability_with_odds_multiplier(probability: f64, multiplier: f64) -> f64 {
 }
 
 fn is_untargeted_long_ball_action(action: &str) -> bool {
+    use SoccerActionLabel::*;
     matches!(
-        normalize_soccer_action_label(action),
-        "clearance" | "route-one" | "long-ball-flight"
+        SoccerActionLabel::classify(action),
+        Some(Clearance | RouteOne | LongBallFlight)
     )
 }
 
 fn offside_exempt_restart_action(action: &str) -> bool {
+    use RestartLabel::*;
     matches!(
-        normalize_soccer_action_label(action),
-        "throw-in" | "goal-kick" | "corner-kick"
+        RestartLabel::from_canonical(normalize_soccer_action_label(action)),
+        Some(ThrowIn | GoalKick | CornerKick)
     )
 }
 
 fn restart_action_label(action: &str) -> Option<&'static str> {
-    match normalize_soccer_action_label(action) {
-        "kickoff" => Some("kickoff"),
-        "throw-in" => Some("throw-in"),
-        "goal-kick" => Some("goal-kick"),
-        "corner-kick" => Some("corner-kick"),
-        "free-kick" => Some("free-kick"),
+    use RestartLabel::*;
+    let restart = RestartLabel::from_canonical(normalize_soccer_action_label(action))?;
+    match restart {
+        Kickoff | ThrowIn | GoalKick | CornerKick | FreeKick => Some(restart.as_str()),
         // Offside is restarted with an indirect free kick: the taker must play it
         // to a teammate (no dribble), so the double-touch can't happen by design.
-        "offside" => Some("free-kick"),
-        _ => None,
+        Offside => Some(FreeKick.as_str()),
+        DirectFreeKick | IndirectFreeKick => None,
     }
 }
 
 fn canonical_set_play_restart_label(label: &str) -> Option<&'static str> {
     let normalized = normalize_soccer_action_label(label.trim());
-    match normalized {
-        "kickoff" => return Some("kickoff"),
-        "throw-in" => return Some("throw-in"),
-        "goal-kick" => return Some("goal-kick"),
-        "corner-kick" => return Some("corner-kick"),
-        "free-kick" => return Some("free-kick"),
-        "direct-free-kick" => return Some("direct-free-kick"),
-        "indirect-free-kick" => return Some("indirect-free-kick"),
-        _ => {}
+    if let Some(restart) = RestartLabel::from_canonical(normalized) {
+        // Offside is not a set-play restart label here (falls through to the
+        // CSV-header aliasing below, which yields None for it) — preserve that.
+        if restart != RestartLabel::Offside {
+            return Some(restart.as_str());
+        }
     }
 
     match normalize_csv_header(normalized).as_str() {
@@ -9100,9 +8923,14 @@ fn set_play_restart_labels_match(a: &str, b: &str) -> bool {
     let Some(b) = canonical_set_play_restart_label(b) else {
         return false;
     };
-    a == b
-        || matches!(a, "free-kick" | "direct-free-kick" | "indirect-free-kick")
-            && matches!(b, "free-kick" | "direct-free-kick" | "indirect-free-kick")
+    if a == b {
+        return true;
+    }
+    let (Some(a), Some(b)) = (RestartLabel::from_canonical(a), RestartLabel::from_canonical(b))
+    else {
+        return false;
+    };
+    a.is_free_kick_family() && b.is_free_kick_family()
 }
 
 fn held_restart_action_for_snapshot(
@@ -14766,8 +14594,11 @@ enum PassChainContinuationKind {
 }
 
 fn pass_chain_continuation_kind(action: &str) -> Option<PassChainContinuationKind> {
-    let action = normalize_soccer_action_label(action);
-    if matches!(action, "shoot" | "first-time-shot" | "first-time-header") {
+    use SoccerActionLabel::*;
+    if matches!(
+        SoccerActionLabel::classify(action),
+        Some(Shoot | FirstTimeShot | FirstTimeHeader)
+    ) {
         return Some(PassChainContinuationKind::Shot);
     }
     if is_pass_like_action(action) {
@@ -15766,44 +15597,20 @@ fn defensive_relaxation_signal(
 }
 
 fn soccer_goal_credit_action_is_relevant(action: &str) -> bool {
+    use SoccerActionLabel::*;
     matches!(
-        normalize_soccer_action_label(action),
-        "shoot"
-            | "first-time-shot"
-            | "first-time-header"
-            | "pass"
-            | "killer-pass"
-            | "aerial-pass"
-            | "flank-low-cross"
-            | "flank-high-cross"
-            | "first-time-pass"
-            | "dribble"
-            | "carry-forward"
-            | "carry-out-left"
-            | "carry-out-right"
-            | "protect-ball"
-            | "side-step"
-            | "left-cut"
-            | "right-cut"
-            | "nutmeg"
-            | "fake-left-cut-right"
-            | "fake-right-cut-left"
-            | "hold-up-flank"
-            | "space"
-            | "support-shape"
-            | "support-roam"
-            | "check-to-ball"
-            | "run-in-behind"
-            | "exploit-space-run"
-            | "wide-outlet"
-            | "shot-creation-run"
-            | "overlap-run"
-            | "support-push-up"
-            | "support-screen"
-            | "control-touch"
-            | "set-play-run"
-            | "clearance"
-            | "route-one"
+        SoccerActionLabel::classify(action),
+        Some(
+            Shoot | FirstTimeShot | FirstTimeHeader | Pass | KillerPass | AerialPass
+                | FlankLowCross | FlankHighCross | FirstTimePass | Dribble | CarryForward
+                | CarryOutLeft | CarryOutRight | ProtectBall | SideStep | LeftCut | RightCut
+                | Nutmeg | FakeLeftCutRight | FakeRightCutLeft | HoldUpFlank | Space
+                | SupportShape | SupportRoam | CheckToBall | RunInBehind | ExploitSpaceRun
+                // NB: original had the DEAD `"support-push-up"` arm but no live
+                // `"vertical-attack"`, so vertical-attack is intentionally excluded.
+                | WideOutlet | ShotCreationRun | OverlapRun | SupportScreen
+                | ControlTouch | SetPlayRun | Clearance | RouteOne
+        )
     )
 }
 
@@ -18645,8 +18452,9 @@ fn playback_intent_priority(
 }
 
 fn playback_pass_flight_for_action(action: &str) -> Option<PassFlight> {
-    pass_like_action_flight(action).or(match action {
-        "clearance" | "route-one" => Some(PassFlight::Aerial),
+    use SoccerActionLabel::*;
+    pass_like_action_flight(action).or_else(|| match SoccerActionLabel::classify(action) {
+        Some(Clearance | RouteOne) => Some(PassFlight::Aerial),
         _ => None,
     })
 }
@@ -22582,9 +22390,10 @@ impl SoccerFrameLivenessAccumulator {
 }
 
 fn soccer_frame_liveness_action_is_shot(action: &str) -> bool {
+    use SoccerActionLabel::*;
     matches!(
-        normalize_soccer_action_label(action),
-        "shoot" | "first-time-shot" | "first-time-header"
+        SoccerActionLabel::classify(action),
+        Some(Shoot | FirstTimeShot | FirstTimeHeader)
     )
 }
 
@@ -29092,49 +28901,28 @@ fn soccer_neural_action_hash(action: &str) -> f64 {
 }
 
 fn soccer_neural_action_family_features(action: &str) -> (f64, f64, f64) {
+    use SoccerActionLabel::*;
     let action = normalize_soccer_action_label(action);
+    let label = SoccerActionLabel::classify(action);
     let attack = matches!(
-        action,
-        "shoot"
-            | "dribble"
-            | "carry-forward"
-            | "carry-out-left"
-            | "carry-out-right"
-            | "protect-ball"
-            | "side-step"
-            | "left-cut"
-            | "right-cut"
-            | "nutmeg"
-            | "fake-left-cut-right"
-            | "fake-right-cut-left"
-            | "pass"
-            | "killer-pass"
-            | "aerial-pass"
-            | "wall-pass"
-            | "corner-flag-cross"
-            | "surprise-pass"
-            | "flick-on"
-            | "vertical-attack"
-            | "turnover-burst"
-            | "switch-play"
-            | "recycle-reset"
-            | "flank-low-cross"
-            | "flank-high-cross"
-            | "route-one"
-            | "first-time-shot"
-            | "first-time-header"
-            | "first-time-pass"
-            | "clearance"
+        label.as_ref(),
+        Some(
+            Shoot | Dribble | CarryForward | CarryOutLeft | CarryOutRight | ProtectBall | SideStep
+                | LeftCut | RightCut | Nutmeg | FakeLeftCutRight | FakeRightCutLeft | Pass
+                | KillerPass | AerialPass | WallPass | CornerFlagCross | SurprisePass | FlickOn
+                | VerticalAttack | TurnoverBurst | SwitchPlay | RecycleReset | FlankLowCross
+                | FlankHighCross | RouteOne | FirstTimeShot | FirstTimeHeader | FirstTimePass
+                | Clearance
+        )
     );
     let defense = matches!(
-        action,
-        "tackle" | "defend" | "defend-shape" | "defend-roam" | "press-cover"
+        label.as_ref(),
+        Some(Tackle | Defend | DefendShape | DefendRoam | PressCover)
     );
     let support = matches!(
-        action,
-        "recover" | "control-touch" | "set-play-run" | "recycle-reset"
-    )
-        || is_attacking_support_action_label(action);
+        label.as_ref(),
+        Some(Recover | ControlTouch | SetPlayRun | RecycleReset)
+    ) || is_attacking_support_action_label(action);
     (
         soccer_neural_bool(attack),
         soccer_neural_bool(defense),
@@ -29182,45 +28970,35 @@ const SOCCER_POLICY_ACTIONS: &[&str] = &[
 /// their family; first-touch pass/shot stay separate from ordinary pass/shoot because
 /// control-first is a mutually exclusive receiving decision.
 fn soccer_policy_action_index(action: &str) -> Option<usize> {
-    let family = match normalize_soccer_action_label(action) {
-        "hold" => "hold",
-        "space" | "move" => "space",
-        "control-touch" => "control-touch",
-        "dribble"
-        | "carry-forward"
-        | "carry-out-left"
-        | "carry-out-right"
-        | "left-cut"
-        | "right-cut"
-        | "nutmeg"
-        | "fake-left-cut-right"
-        | "fake-right-cut-left"
-        | "side-step"
-        | "protect-ball" => "dribble",
-        "pass" => "pass",
-        "first-time-pass" => "first-time-pass",
-        "aerial-pass" => "aerial-pass",
-        "killer-pass" | "threaded" => "killer-pass",
-        "wall-pass" => "wall-pass",
-        "corner-flag-cross" => "corner-flag-cross",
-        "vertical-attack" | "run-in-behind" | "exploit-space-run" | "support-push-up" => {
-            "vertical-attack"
-        }
-        "vacate-space" | "support-screen" => "vacate-space",
-        "surprise-pass" => "surprise-pass",
-        "scoop-pass" => "scoop-pass",
-        "flick-on" => "flick-on",
-        "turnover-burst" => "turnover-burst",
-        "switch-play" => "switch-play",
-        "recycle-reset" => "recycle-reset",
-        "flank-low-cross" => "flank-low-cross",
-        "flank-high-cross" => "flank-high-cross",
-        "clearance" => "clearance",
-        "route-one" => "route-one",
-        "shoot" => "shoot",
-        "first-time-shot" | "first-time-header" => "first-time-shot",
-        "tackle" => "tackle",
-        "press-cover" => "press-cover",
+    use SoccerActionLabel::*;
+    let family = match SoccerActionLabel::classify(action)? {
+        Hold => "hold",
+        Space => "space",
+        ControlTouch => "control-touch",
+        Dribble | CarryForward | CarryOutLeft | CarryOutRight | LeftCut | RightCut | Nutmeg
+        | FakeLeftCutRight | FakeRightCutLeft | SideStep | ProtectBall => "dribble",
+        Pass => "pass",
+        FirstTimePass => "first-time-pass",
+        AerialPass => "aerial-pass",
+        KillerPass => "killer-pass",
+        WallPass => "wall-pass",
+        CornerFlagCross => "corner-flag-cross",
+        VerticalAttack | RunInBehind | ExploitSpaceRun => "vertical-attack",
+        VacateSpace | SupportScreen => "vacate-space",
+        SurprisePass => "surprise-pass",
+        ScoopPass => "scoop-pass",
+        FlickOn => "flick-on",
+        TurnoverBurst => "turnover-burst",
+        SwitchPlay => "switch-play",
+        RecycleReset => "recycle-reset",
+        FlankLowCross => "flank-low-cross",
+        FlankHighCross => "flank-high-cross",
+        Clearance => "clearance",
+        RouteOne => "route-one",
+        Shoot => "shoot",
+        FirstTimeShot | FirstTimeHeader => "first-time-shot",
+        Tackle => "tackle",
+        PressCover => "press-cover",
         _ => return None,
     };
     SOCCER_POLICY_ACTIONS
@@ -39861,8 +39639,9 @@ fn infer_tracking_action(
     after_frame: &SoccerTrackingFrame,
 ) -> String {
     let Some(next_player) = after.players.iter().find(|p| p.id == player.id) else {
-        return "hold".to_string();
+        return SoccerActionLabel::Hold.as_str().to_string();
     };
+    let tun = &tunables().tracking;
     let before_obs = before.observation_for(player.id);
     let after_obs = after.observation_for(player.id);
     let moved = player.position.distance(next_player.position);
@@ -39882,7 +39661,7 @@ fn infer_tracking_action(
             return action;
         }
         if tracking_goal_line_scoring_team(before, after) == Some(player.team) {
-            return "shoot".to_string();
+            return SoccerActionLabel::Shoot.as_str().to_string();
         }
         if let Some(holder) = after.ball.holder {
             if holder != player.id
@@ -39901,49 +39680,51 @@ fn infer_tracking_action(
             return tracking_pass_label(before_frame, after_frame, before, after).to_string();
         }
         if before_obs.shot_lane_open
-            && before_obs.yards_to_goal <= 25.0
+            && before_obs.yards_to_goal <= tun.shot_lane_max_yards_to_goal
             && tracking_ball_moved_toward_goal(before, after, player.team)
         {
-            return "shoot".to_string();
+            return SoccerActionLabel::Shoot.as_str().to_string();
         }
-        if moved > before.dt_seconds * 1.2 {
-            return "dribble".to_string();
+        if moved > before.dt_seconds * tun.moved_dt_multiplier {
+            return SoccerActionLabel::Dribble.as_str().to_string();
         }
-        return "hold".to_string();
+        return SoccerActionLabel::Hold.as_str().to_string();
     }
 
     if before.possession_team() == Some(player.team.other())
         && after.ball.holder == Some(player.id)
-        && player.position.distance(before.ball.position) < 3.8
+        && player.position.distance(before.ball.position) < tun.tackle_recover_max_distance_yards
     {
-        return "tackle".to_string();
+        return SoccerActionLabel::Tackle.as_str().to_string();
     }
 
     let before_ball_distance = player.position.distance(before.ball.position);
     let after_ball_distance = next_player.position.distance(after.ball.position);
     if before.possession_team() == Some(player.team.other())
-        && after_ball_distance + 0.35 < before_ball_distance
+        && after_ball_distance + tun.defend_closing_margin_yards < before_ball_distance
     {
-        return "defend".to_string();
+        return SoccerActionLabel::Defend.as_str().to_string();
     }
 
     if before.possession_team() == Some(player.team)
-        && (after_obs.open_space_score > before_obs.open_space_score + 0.25
-            || moved > before.dt_seconds * 1.2)
+        && (after_obs.open_space_score
+            > before_obs.open_space_score + tun.space_improvement_threshold
+            || moved > before.dt_seconds * tun.moved_dt_multiplier)
     {
-        return infer_tracking_support_action(player, next_player, before, after, &before_obs)
-            .unwrap_or("space")
-            .to_string();
+        let support = infer_tracking_support_action(player, next_player, before, after, &before_obs);
+        return support
+            .map(str::to_string)
+            .unwrap_or_else(|| SoccerActionLabel::Space.as_str().to_string());
     }
 
-    if moved > before.dt_seconds * 1.2 {
+    if moved > before.dt_seconds * tun.moved_dt_multiplier {
         if before.possession_team() == Some(player.team.other()) {
-            "defend".to_string()
+            SoccerActionLabel::Defend.as_str().to_string()
         } else {
-            "space".to_string()
+            SoccerActionLabel::Space.as_str().to_string()
         }
     } else {
-        "hold".to_string()
+        SoccerActionLabel::Hold.as_str().to_string()
     }
 }
 
@@ -40197,65 +39978,52 @@ fn tracking_action_target_trace(
         before.field_width * 0.5,
         player.team.goal_y(before.field_length),
     );
-    let (point, target_player) = match normalize_soccer_action_label(action) {
-        action if is_pass_like_action(action) => {
-            let holder_teammate = after.ball.holder.and_then(|holder| {
-                after
-                    .players
-                    .iter()
-                    .find(|p| p.id == holder && p.team == player.team && p.id != player.id)
-                    .map(|p| (p.position, Some(p.id)))
-            });
-            holder_teammate.unwrap_or_else(|| {
-                (
-                    after.ball.position,
-                    infer_tracking_pass_receiver(player, before, after),
-                )
-            })
+    let normalized = normalize_soccer_action_label(action);
+    let (point, target_player) = if is_pass_like_action(normalized) {
+        let holder_teammate = after.ball.holder.and_then(|holder| {
+            after
+                .players
+                .iter()
+                .find(|p| p.id == holder && p.team == player.team && p.id != player.id)
+                .map(|p| (p.position, Some(p.id)))
+        });
+        holder_teammate.unwrap_or_else(|| {
+            (
+                after.ball.position,
+                infer_tracking_pass_receiver(player, before, after),
+            )
+        })
+    } else {
+        use SoccerActionLabel::*;
+        match SoccerActionLabel::classify(normalized) {
+            Some(Clearance | RouteOne) => (after.ball.position, None),
+            Some(Shoot | FirstTimeShot | FirstTimeHeader) => (goal, None),
+            // NB: original listed the DEAD `"support-push-up"` arm but no live
+            // `"vertical-attack"`, so vertical-attack stays in the `_ => None`
+            // bucket — preserve that exactly (do not add VerticalAttack here).
+            Some(
+                Dribble | CarryForward | CarryOutLeft | CarryOutRight | ProtectBall | SideStep
+                | LeftCut | RightCut | Nutmeg | FakeLeftCutRight | FakeRightCutLeft | ControlTouch
+                | Space | SupportShape | SupportRoam | CheckToBall | RunInBehind | ExploitSpaceRun
+                | WideOutlet | ShotCreationRun | OverlapRun | SupportScreen | VacateSpace | Defend,
+            ) => (
+                next_player.map(|p| p.position).unwrap_or(player.position),
+                None,
+            ),
+            Some(Tackle) => {
+                let target_player = before.ball.holder.or(after.ball.holder);
+                let point = target_player
+                    .and_then(|id| {
+                        before
+                            .player_position(id)
+                            .or_else(|| after.player_position(id))
+                    })
+                    .unwrap_or(before.ball.position);
+                (point, target_player)
+            }
+            Some(Hold) => (player.home_position, None),
+            _ => return None,
         }
-        "clearance" | "route-one" => (after.ball.position, None),
-        "shoot" | "first-time-shot" | "first-time-header" => (goal, None),
-        "dribble"
-        | "carry-forward"
-        | "carry-out-left"
-        | "carry-out-right"
-        | "protect-ball"
-        | "side-step"
-        | "left-cut"
-        | "right-cut"
-        | "nutmeg"
-        | "fake-left-cut-right"
-        | "fake-right-cut-left"
-        | "control-touch"
-        | "space"
-        | "support-shape"
-        | "support-roam"
-        | "check-to-ball"
-        | "run-in-behind"
-        | "exploit-space-run"
-        | "wide-outlet"
-        | "shot-creation-run"
-        | "overlap-run"
-        | "support-push-up"
-        | "support-screen"
-        | "vacate-space"
-        | "defend" => (
-            next_player.map(|p| p.position).unwrap_or(player.position),
-            None,
-        ),
-        "tackle" => {
-            let target_player = before.ball.holder.or(after.ball.holder);
-            let point = target_player
-                .and_then(|id| {
-                    before
-                        .player_position(id)
-                        .or_else(|| after.player_position(id))
-                })
-                .unwrap_or(before.ball.position);
-            (point, target_player)
-        }
-        "hold" => (player.home_position, None),
-        _ => return None,
     };
     let point = point.clamp_to_pitch(before.field_width, before.field_length);
     let dribble_touch = if is_dribble_action_label(action) {
