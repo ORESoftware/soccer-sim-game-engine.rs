@@ -878,6 +878,11 @@ const PASS_RECEPTION_CONGESTION_FLOOR: f64 = 0.28;
 // under 1.0 because the opponent-arrival estimate assumes a perfect sprint (no reaction
 // delay) and the receiver is also contesting the point.
 const PASS_RECEPTION_OPPONENT_TIME_MARGIN: f64 = 0.95;
+// Pass-vs-hold under pressure: a pinned carrier's CONTESTED pass (low expected completion) has its
+// pass score damped by `heat * (1 - completion) * this` so it loses to shield/hold/dribble rather
+// than being forced into traffic (the turnover the user hates). Calm play and a genuinely open pass
+// are untouched (heat or contested ≈ 0). Gated `DD_SOCCER_DISABLE_PRESSURED_PASS_DAMP`.
+const PRESSURED_CONTESTED_PASS_DAMP: f64 = 0.40;
 // A BACKWARD ball (aim point this far behind the passer along the attack direction)
 // is only safe to a CLEARLY OPEN teammate — recycling backwards into coverage hands
 // the ball back toward the opponent. A backward pass whose receiver has an opponent
