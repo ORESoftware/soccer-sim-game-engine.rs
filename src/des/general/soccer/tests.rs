@@ -13369,6 +13369,104 @@ fn back_four_horizontal_gap_targets_preserve_home_slot_order() {
 }
 
 #[test]
+fn back_four_forms_offside_trap_line_when_defending_but_staggers_in_possession() {
+    // A staggered back four in Home's own half. Defending (or on a 50/50), they should
+    // pull onto a shared y (the offside trap); in possession they keep the stagger so a
+    // wingback can overlap and the line can push on.
+    let mut sim = SoccerMatch::default_11v11(MatchConfig {
+        duration_seconds: 0.1,
+        seed: 71,
+        ..Default::default()
+    });
+    let home_def: Vec<usize> = sim
+        .players
+        .iter()
+        .filter(|p| p.team == Team::Home && p.role == PlayerRole::Defender)
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(home_def.len(), 4, "test needs the back four");
+    // Staggered fore-aft (y) well inside Home's own half (y < 60), spread laterally so the
+    // home-slot order is unambiguous.
+    let staggered_y = [20.0, 28.0, 36.0, 44.0];
+    let lateral_x = [12.0, 30.0, 50.0, 68.0];
+    for ((id, y), x) in home_def
+        .iter()
+        .copied()
+        .zip(staggered_y)
+        .zip(lateral_x)
+    {
+        sim.players[id].position = Vec2::new(x, y);
+    }
+    let input_spread = staggered_y
+        .iter()
+        .cloned()
+        .fold(f64::MIN, f64::max)
+        - staggered_y.iter().cloned().fold(f64::MAX, f64::min);
+
+    let adjusted_y_spread = |sim: &SoccerMatch| -> f64 {
+        let snap = WorldSnapshot::from_match(sim);
+        let ys: Vec<f64> = home_def
+            .iter()
+            .zip(staggered_y)
+            .map(|(&id, y)| {
+                snap.back_four_shape_adjusted_target(id, Vec2::new(sim.players[id].position.x, y))
+                    .y
+            })
+            .collect();
+        ys.iter().cloned().fold(f64::MIN, f64::max)
+            - ys.iter().cloned().fold(f64::MAX, f64::min)
+    };
+
+    // Defending: the opponent holds the ball deep in Home's half -> the line forms up.
+    let away_holder = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Away && p.role == PlayerRole::Forward)
+        .map(|p| p.id)
+        .unwrap();
+    sim.ball.holder = Some(away_holder);
+    sim.ball.position = Vec2::new(40.0, 50.0);
+    sim.ball.velocity = Vec2::zero();
+    sim.ball.acceleration = Vec2::zero();
+    sim.players[away_holder].position = sim.ball.position;
+    sim.ball.last_touch_team = Some(Team::Away);
+    let defending_spread = adjusted_y_spread(&sim);
+    assert!(
+        defending_spread < input_spread - 4.0,
+        "defending in own half the back four should collapse onto a trap line: \
+         spread {defending_spread:.2} should be well under {input_spread:.2}"
+    );
+
+    // 50/50 loose ball (no controlled holder) we last brushed -> still form the line.
+    sim.ball.holder = None;
+    sim.ball.last_touch_team = Some(Team::Home);
+    let loose_spread = adjusted_y_spread(&sim);
+    assert!(
+        loose_spread < input_spread - 4.0,
+        "on a 50/50 the back four should still form the trap line: \
+         spread {loose_spread:.2} should be well under {input_spread:.2}"
+    );
+
+    // In possession: a Home player controls the ball -> stagger is preserved (no y-parity).
+    let home_holder = sim
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.role == PlayerRole::Forward)
+        .map(|p| p.id)
+        .unwrap();
+    sim.ball.holder = Some(home_holder);
+    sim.ball.position = Vec2::new(40.0, 50.0);
+    sim.players[home_holder].position = sim.ball.position;
+    sim.ball.last_touch_team = Some(Team::Home);
+    let possession_spread = adjusted_y_spread(&sim);
+    assert!(
+        (possession_spread - input_spread).abs() < 1e-6,
+        "in possession the back four keeps its fore-aft stagger (no offside-trap pull): \
+         spread {possession_spread:.2} should equal {input_spread:.2}"
+    );
+}
+
+#[test]
 fn back_four_average_never_presses_past_five_yards_into_opponent_half() {
     let mut home = SoccerMatch::default_11v11(MatchConfig::default());
     let home_def: Vec<usize> = home
