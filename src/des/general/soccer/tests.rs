@@ -256,6 +256,9 @@ fn mpc_latent_objective_learns_from_pass_chains_shots_and_goals() {
     let after_three = sim.mpc_latent_objective(Team::Home);
     assert!(after_three.pass_chain_continuity > after_two.pass_chain_continuity);
 
+    // Shot-on-target credit is now distance-gated to within 20yd of goal, so the shooter must be
+    // in genuine shooting range for the latent objective to register shot pressure.
+    sim.players[home_ids[3]].position = Vec2::new(40.0, 108.0);
     sim.record_shot_on_target_rewards(Team::Home, home_ids[3]);
     let after_shot = sim.mpc_latent_objective(Team::Home);
     assert!(after_shot.shot_pressure > 0.0);
