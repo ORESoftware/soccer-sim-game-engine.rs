@@ -8236,8 +8236,8 @@ impl SoccerMatch {
             return None;
         }
         Some(match self.gk_handling_since_clock {
-            Some(since) if since.is_finite() => (self.clock_seconds - since).max(0.0),
-            _ => 0.0,
+            Some(since) => (self.clock_seconds - since).max(0.0),
+            None => 0.0,
         })
     }
 
