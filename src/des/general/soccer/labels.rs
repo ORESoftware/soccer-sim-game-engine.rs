@@ -341,6 +341,15 @@ impl SoccerActionLabel {
             | "dribble-to-pass"
             | "dribble_to_pass"
             | "dribbletopass" => "open-pass-lane",
+            "round-the-keeper"
+            | "round_the_keeper"
+            | "roundthekeeper"
+            | "round-the-gk"
+            | "round-keeper"
+            | "round_keeper"
+            | "rounding-the-keeper"
+            | "dribble-round-keeper"
+            | "beat-the-keeper" => "round-the-keeper",
             "turnover-burst"
             | "turnover_burst"
             | "turnoverburst"
