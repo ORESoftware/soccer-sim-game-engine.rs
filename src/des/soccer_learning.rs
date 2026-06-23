@@ -966,7 +966,6 @@ pub fn validate_soccer_neural_learning_config_for_learning_run(
             "criticBaselineWeight must be in [0, 1] when neural learning is enabled".to_string(),
         );
     }
-<<<<<<< HEAD
     // Keep both convergent MARL/MAPPO validations (ours: team-reward share; theirs: team +
     // intermediate reward weights and the MAPPO clip epsilon).
     if !(0.0..=1.0).contains(&config.mappo_team_reward_share) {
@@ -974,8 +973,6 @@ pub fn validate_soccer_neural_learning_config_for_learning_run(
             "mappoTeamRewardShare must be in [0, 1] when neural learning is enabled".to_string(),
         );
     }
-=======
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
     if !(0.0..=1.0).contains(&config.marl_team_reward_weight) {
         return Err(
             "marlTeamRewardWeight must be in [0, 1] when neural learning is enabled".to_string(),
