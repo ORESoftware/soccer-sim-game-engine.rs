@@ -4289,15 +4289,16 @@ fn goal_proximity_raises_shot_and_killer_pass_pressure() {
     // and the floor's monotonic rise with proximity can be exercised.
     observation.opposing_goalkeeper_out_of_position = 0.9;
 
-    observation.yards_to_goal = 42.0;
+    // Ranges within the 30yd shot cap (no shot is taken beyond it now), ramping in toward goal.
+    observation.yards_to_goal = 28.0;
     observation.goal_attack_window_score = 0.08;
     let long_range_shot_floor =
         goal_proximity_shot_pressure_floor(&observation, PlayerRole::Forward, ability01(8.2));
-    observation.yards_to_goal = 34.0;
+    observation.yards_to_goal = 18.0;
     observation.goal_attack_window_score = 0.22;
     let mid_range_shot_floor =
         goal_proximity_shot_pressure_floor(&observation, PlayerRole::Forward, ability01(8.2));
-    observation.yards_to_goal = 28.0;
+    observation.yards_to_goal = 10.0;
     observation.goal_attack_window_score = 0.44;
     let close_range_shot_floor =
         goal_proximity_shot_pressure_floor(&observation, PlayerRole::Forward, ability01(8.2));
