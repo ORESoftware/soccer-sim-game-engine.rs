@@ -7569,6 +7569,36 @@ impl PlayerAgent {
                             }
                         }
                     }
+                    "round-the-keeper" => {
+                        order_names.push("round-the-keeper".to_string());
+                        let round_chance =
+                            action_option_score(&action_options, "round-the-keeper");
+                        if let Some((spot, sprint_flag)) = round_the_keeper {
+                            if agentic_action_commitment(
+                                round_chance,
+                                snapshot.dt_seconds,
+                                &observation,
+                                self.role,
+                            ) {
+                                // Carry closer to goal, around the keeper, to a spot with a clear
+                                // strike (then shoot once there); driven by the per-player MPC like
+                                // any dribble. Sprint per the maneuver's own decision.
+                                let kind = DribbleMoveKind::CarryForward;
+                                let touch = snapshot
+                                    .deterministic_dribble_touch_decision_for(self.id, kind);
+                                open_lane_sprint = Some(sprint_flag);
+                                chosen = Some((
+                                    SoccerAction::DribbleMove {
+                                        target: spot,
+                                        kind,
+                                        touch,
+                                    },
+                                    "round-the-keeper".to_string(),
+                                ));
+                                break;
+                            }
+                        }
+                    }
                     "side-step" => {
                         order_names.push("side-step".to_string());
                         let side_step_chance = action_option_score(&action_options, "side-step");
