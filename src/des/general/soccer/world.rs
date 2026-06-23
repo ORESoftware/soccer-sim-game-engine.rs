@@ -23205,12 +23205,30 @@ impl WorldSnapshot {
                 ));
                 let direct_opponent_aim_penalty =
                     direct_opponent_aim_score_penalty(direct_opponent_control_risk);
+                let aerial_passer_pressure_for_veto =
+                    self.attacker_pressure_on_point(me.team, me_position);
                 let direct_opponent_aim_veto = if self
                     .pass_point_directly_favors_opponent(me.team, position, pass_point)
                     || self.pass_point_directly_favors_opponent(
                         me.team,
                         position,
                         anticipated_position,
+                    )
+                    || self.pass_reception_conceded_to_opponent(
+                        me.team,
+                        position,
+                        me_position,
+                        pass_point,
+                        score_nominal_speed,
+                        aerial_passer_pressure_for_veto,
+                    )
+                    || self.pass_reception_conceded_to_opponent(
+                        me.team,
+                        position,
+                        me_position,
+                        anticipated_position,
+                        score_nominal_speed,
+                        aerial_passer_pressure_for_veto,
                     ) {
                     PASS_DIRECT_OPPONENT_AIM_HARD_VETO_PENALTY
                 } else {
