@@ -8565,33 +8565,27 @@ impl PlayerAgent {
                 action = fallback_action;
                 action_label = fallback_label;
             }
-<<<<<<< HEAD
-            // The open-passing-lane carry uses its OWN sprint decision (very high pressure or a
-            // fast-tracking opponent → burst, else a controlled run to conserve energy); every
-            // other carry uses the generic rule.
+            // Both convergent open-lane carries decide sprint vs run on their own terms; every
+            // other carry uses the generic rule. Ours ("open-passing-lane") sets `open_lane_sprint`
+            // in its arm (very high pressure / fast-tracking opponent → burst, else a controlled
+            // run); theirs ("open-pass-lane") decides via `open_pass_lane_sprint_for_action`. When
+            // our arm fired, its explicit decision wins; otherwise fall to theirs (its open-pass-
+            // lane decision, or the generic carry rule for any other dribble).
             let sprint = open_lane_sprint.unwrap_or_else(|| {
                 matches!(action, SoccerAction::DribbleMove { .. })
-                    && (self.role == PlayerRole::Forward
-                        || observation.forward_dribble_space_yards > 3.0
-                        || observation.perceived_pressure > 0.35
-                        || observation.decision_urgency > 0.46
-                        || observation.offensive_urgency > 0.34)
+                    && (open_pass_lane_sprint_for_action(
+                        snapshot,
+                        self,
+                        &observation,
+                        &action_label,
+                        &action,
+                    ) || (action_label != OPEN_PASS_LANE_ACTION_LABEL
+                        && (self.role == PlayerRole::Forward
+                            || observation.forward_dribble_space_yards > 3.0
+                            || observation.perceived_pressure > 0.35
+                            || observation.decision_urgency > 0.46
+                            || observation.offensive_urgency > 0.34)))
             });
-=======
-            let sprint = matches!(action, SoccerAction::DribbleMove { .. })
-                && (open_pass_lane_sprint_for_action(
-                    snapshot,
-                    self,
-                    &observation,
-                    &action_label,
-                    &action,
-                ) || (action_label != OPEN_PASS_LANE_ACTION_LABEL
-                    && (self.role == PlayerRole::Forward
-                    || observation.forward_dribble_space_yards > 3.0
-                    || observation.perceived_pressure > 0.35
-                    || observation.decision_urgency > 0.46
-                    || observation.offensive_urgency > 0.34)));
->>>>>>> origin/alex-1
             self.last_decision = Some(self.decision_trace(
                 snapshot,
                 mdp_state,
