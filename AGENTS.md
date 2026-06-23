@@ -42,4 +42,3 @@ only as `PlanarObstacle` soft keep-outs, never co-optimized state):
 MPC defaults: base `MatchConfig` OFF (deterministic tests/learning); live-gameplay
 preset ON (tier2 + field-aware + reconcile + latent + formation-local). Master live
 toggle: `SOCCER_LIVE_MPC`.
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
