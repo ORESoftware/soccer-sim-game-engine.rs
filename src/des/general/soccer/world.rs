@@ -4288,6 +4288,44 @@ impl SoccerMatch {
             .map(|value| value * target_scale)
     }
 
+    /// Model-based look-ahead value of a candidate `action` at decision time
+    /// (AlphaZero/MuZero-style planning): roll the learned world model forward from
+    /// the current state + this candidate action and score the predicted state with
+    /// the critic. This is the decision-DRIVING generalization of
+    /// [`Self::model_based_value`] — but unlike that diagnostic, which scored a
+    /// NULL-action next state (the MBV-PARITY-01 approximation), this builds the
+    /// step's features with the candidate's OWN action channels, so the critic sees
+    /// an in-distribution input and the look-ahead can legitimately steer selection.
+    ///
+    /// The rollout is cheap because `predict_next`/`predict_value` are single MLP
+    /// forward passes over the learned dynamics + value heads — NOT a physics
+    /// re-simulation — so this stays affordable on the live decision path.
+    ///
+    /// - `depth == 0` → the depth-0 critic value of `(s, action)`, byte-for-byte the
+    ///   same as the non-look-ahead path (`predict_value(features(s, a))`).
+    /// - `depth >= 1` → predict the next state via the world model and score THAT
+    ///   with the critic (a one-step rollout; multi-step latent branching over
+    ///   follow-up action families is a follow-up commit).
+    ///
+    /// Returns RAW critic units (the caller applies `target_scale`). `None` when no
+    /// critic value is available, no world model exists for a `depth >= 1` request,
+    /// or a forward pass is degenerate — so the caller falls back to the depth-0
+    /// value and play degrades gracefully rather than feeding garbage into selection.
+    fn model_based_lookahead_value(
+        &self,
+        base: &SoccerLearningTransition,
+        action: &str,
+        learner: &SoccerNeuralLearner,
+        depth: usize,
+    ) -> Option<f64> {
+        let features = soccer_neural_transition_features_with_action(base, action);
+        if depth == 0 {
+            return learner.predict_value(&features);
+        }
+        let next = self.world_model.as_ref()?.predict_next(&features)?;
+        learner.predict_value(&next)
+    }
+
     fn apply_full_game_learning_if_ready(&mut self) {
         if !self.config.learning_enabled
             || !self.config.full_game_learning_enabled
