@@ -1437,6 +1437,12 @@ fn mpc_execution_estimate_for_action(
                 (0.28 + dribble_skill * 0.32 + pressure * 0.26 + target_space_fit * 0.12)
                     .clamp(0.12, 0.96)
             }
+            "open-passing-lane" => {
+                // A short carry into a clear, opponent-free spot (chosen to have space) — inherently
+                // feasible; scales with control + the space at the spot, lightly damped by pressure.
+                (0.46 + dribble_skill * 0.26 + target_space_fit * 0.18 - pressure * 0.12)
+                    .clamp(0.18, 0.97)
+            }
             "protect-ball" => (0.34 + dribble_skill * 0.28 + pressure * 0.22).clamp(0.10, 0.94),
             _ => direct_prob.max(if left_prob > right_prob {
                 left_prob * 0.92
