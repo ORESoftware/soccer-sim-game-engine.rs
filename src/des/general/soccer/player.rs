@@ -7874,12 +7874,17 @@ impl PlayerAgent {
                 action = fallback_action;
                 action_label = fallback_label;
             }
-            let sprint = matches!(action, SoccerAction::DribbleMove { .. })
-                && (self.role == PlayerRole::Forward
-                    || observation.forward_dribble_space_yards > 3.0
-                    || observation.perceived_pressure > 0.35
-                    || observation.decision_urgency > 0.46
-                    || observation.offensive_urgency > 0.34);
+            // The open-passing-lane carry uses its OWN sprint decision (very high pressure or a
+            // fast-tracking opponent → burst, else a controlled run to conserve energy); every
+            // other carry uses the generic rule.
+            let sprint = open_lane_sprint.unwrap_or_else(|| {
+                matches!(action, SoccerAction::DribbleMove { .. })
+                    && (self.role == PlayerRole::Forward
+                        || observation.forward_dribble_space_yards > 3.0
+                        || observation.perceived_pressure > 0.35
+                        || observation.decision_urgency > 0.46
+                        || observation.offensive_urgency > 0.34)
+            });
             self.last_decision = Some(self.decision_trace(
                 snapshot,
                 mdp_state,
