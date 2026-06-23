@@ -42983,11 +42983,7 @@ fn dribble_dispossession_kind_multiplier(kind: DribbleMoveKind) -> f64 {
         DribbleMoveKind::ProtectBall => 0.58,
         // Even more secure than a static shield: the body stays between defender and ball
         // through the whole turn. (The hard 10% ceiling is applied separately.)
-<<<<<<< HEAD
-        DribbleMoveKind::XaviTurn => 0.50,
-=======
         DribbleMoveKind::XaviTurn => 0.40,
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
         DribbleMoveKind::CarryForward => 0.86,
         DribbleMoveKind::CarryOutLeft | DribbleMoveKind::CarryOutRight => 0.78,
         DribbleMoveKind::FakeLeftCutRight | DribbleMoveKind::FakeRightCutLeft => 0.92,
