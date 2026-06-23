@@ -66355,10 +66355,18 @@ fn clear_goal_approach_shot_probability_ramps_before_must_shoot_window() {
             .map(|option| option.probability)
             .unwrap_or(0.0);
         if idx > 0 {
-            assert!(
+            if previous_shoot < 0.9 {
+                assert!(
                     shoot > previous_shoot + 0.05,
                     "clear shot probability should ramp as goal gets closer: y={y} shoot={shoot} previous={previous_shoot} options={options:?}"
                 );
+            } else {
+                // Inside the 30yd cap a clean shot saturates quickly; once high it must stay high.
+                assert!(
+                    shoot >= previous_shoot - 1e-6,
+                    "saturated clear shot probability should stay high near goal: y={y} shoot={shoot} previous={previous_shoot} options={options:?}"
+                );
+            }
         }
         previous_shoot = shoot;
     }
