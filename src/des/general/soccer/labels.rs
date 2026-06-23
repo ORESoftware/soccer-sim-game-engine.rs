@@ -231,6 +231,7 @@ impl SoccerActionLabel {
             "turnover-burst" => SoccerActionLabel::TurnoverBurst,
             "wait-for-support" => SoccerActionLabel::WaitForSupport,
             "open-pass-lane" => SoccerActionLabel::OpenPassLane,
+            "round-the-keeper" => SoccerActionLabel::RoundTheKeeper,
             "space" => SoccerActionLabel::Space,
             "support-shape" => SoccerActionLabel::SupportShape,
             "support-roam" => SoccerActionLabel::SupportRoam,
