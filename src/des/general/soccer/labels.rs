@@ -342,17 +342,9 @@ impl SoccerActionLabel {
             | "dribble-to-pass"
             | "dribble_to_pass"
             | "dribbletopass" => "open-pass-lane",
-<<<<<<< HEAD
-            "round-the-keeper"
-            | "round_the_keeper"
-            | "roundthekeeper"
-            | "round-the-gk"
-            | "round-keeper"
-            | "round_keeper"
-            | "rounding-the-keeper"
-            | "dribble-round-keeper"
-            | "beat-the-keeper" => "round-the-keeper",
-=======
+            // Unified vocabulary: both teams' alias spellings (ours "round-the-keeper" et al.
+            // and theirs "round-goalkeeper" et al.) normalize to the single canonical label so
+            // any persisted/external label from either side still resolves.
             "round-goalkeeper"
             | "round_goalkeeper"
             | "roundgoalkeeper"
@@ -364,8 +356,16 @@ impl SoccerActionLabel {
             | "beat-keeper"
             | "beat_keeper"
             | "dribble-around-keeper"
-            | "dribble_around_keeper" => "round-goalkeeper",
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
+            | "dribble_around_keeper"
+            | "round-the-keeper"
+            | "round_the_keeper"
+            | "roundthekeeper"
+            | "round-the-gk"
+            | "round-keeper"
+            | "round_keeper"
+            | "rounding-the-keeper"
+            | "dribble-round-keeper"
+            | "beat-the-keeper" => "round-goalkeeper",
             "turnover-burst"
             | "turnover_burst"
             | "turnoverburst"
