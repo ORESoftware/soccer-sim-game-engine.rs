@@ -12801,14 +12801,11 @@ impl Default for SoccerNeuralLearningConfig {
             snapshot_every_batches: DEFAULT_SOCCER_NEURAL_SNAPSHOT_EVERY_BATCHES,
             lp_coupling_enabled: false,
             critic_baseline_weight: 0.0,
-<<<<<<< HEAD
             mappo_team_reward_share: 0.0,
-=======
             marl_algorithm: SoccerMarlAlgorithm::Mappo,
             marl_team_reward_weight: DEFAULT_SOCCER_MARL_TEAM_REWARD_WEIGHT,
             marl_intermediate_reward_weight: DEFAULT_SOCCER_MARL_INTERMEDIATE_REWARD_WEIGHT,
             mappo_clip_epsilon: DEFAULT_SOCCER_MAPPO_CLIP_EPSILON,
->>>>>>> origin/alex-1
         }
     }
 }
