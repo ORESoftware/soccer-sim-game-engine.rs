@@ -7315,6 +7315,12 @@ impl PlayerAgent {
                     action_option_score(&action_options, "open-passing-lane"),
                 ));
             }
+            if round_the_keeper_offered {
+                weighted_ops.push((
+                    "round-the-keeper".to_string(),
+                    action_option_score(&action_options, "round-the-keeper"),
+                ));
+            }
             for rank in 0..pass_targets.len() {
                 let label = format!("pass{}", rank + 1);
                 weighted_ops.push((label.clone(), action_option_score(&action_options, &label)));
