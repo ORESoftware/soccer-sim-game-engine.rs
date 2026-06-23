@@ -13051,8 +13051,6 @@ pub struct MatchConfig {
     /// [`xavi_turn_enabled`].
     #[serde(default)]
     pub disable_xavi_turn: bool,
-<<<<<<< HEAD
-=======
     /// Enable obstacle-aware loose-ball intercept feasibility for THIS match, independent of the
     /// process-wide `DD_SOCCER_ENABLE_OBSTACLE_AWARE_INTERCEPT` env flag (either turns it on).
     /// Default `false` => the straight-line kinematic reach is used unchanged (byte-identical). When
@@ -13060,7 +13058,6 @@ pub struct MatchConfig {
     /// commit to a ball it cannot reach through traffic. See [`loose_ball_corridor_obstruction_yards`].
     #[serde(default)]
     pub enable_obstacle_aware_intercept: bool,
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
     /// Enable the lightweight Bayesian opponent-press belief: a per-player
     /// Beta-Bernoulli posterior over how readily each opponent steps into pass
     /// lanes, which shades the analytic pass-lane interception risk into a Bayesian
