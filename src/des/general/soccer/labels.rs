@@ -69,12 +69,6 @@ pub enum SoccerActionLabel {
     LeftCut,
     RightCut,
     Nutmeg,
-<<<<<<< HEAD
-=======
-    /// The "Xavi turn": a ~280-300 degree shielded pirouette that keeps the ball on the far
-    /// side of the defender and wheels the long way around to turn them.
-    XaviTurn,
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
     FakeLeftCutRight,
     FakeRightCutLeft,
     /// The "Xavi turn": a ~280-300° shielded pirouette that keeps the ball on the far
