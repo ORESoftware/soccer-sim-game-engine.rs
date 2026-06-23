@@ -74,6 +74,10 @@ pub enum SoccerActionLabel {
     /// The "Xavi turn": a ~280-300° shielded pirouette that keeps the ball on the far
     /// side of the defender and wheels the long way around to turn them.
     XaviTurn,
+    /// A short, quick (sprinting) 1-4yd carry to shift a blocked passing lane off the
+    /// opponent in it and open the pass to a teammate. See
+    /// `WorldSnapshot::dribble_to_open_passing_lane_for`.
+    OpenPassingLane,
     VerticalAttack,
     TurnoverBurst,
     /// On-ball: the carrier deliberately keeps the ball and *signals* teammates to
