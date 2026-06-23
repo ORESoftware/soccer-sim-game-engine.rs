@@ -3498,6 +3498,29 @@ const SOCCER_POLICY_GRAD_CLIP_NORM: f64 = 5.0;
 /// Decision-time weight on the actor's log-probability when it biases action
 /// selection (multiplies `ln π(family|s)` added to each candidate's blend score).
 const SOCCER_POLICY_DECISION_WEIGHT: f64 = 0.6;
+/// Width of the **role-identity one-hot** optionally appended to the actor's input
+/// (one slot per [`PlayerRole`] variant: GK / DEF / MID / FWD). With parameter
+/// sharing a single policy net serves all 11 outfield+keeper roles; the one-hot
+/// lets that shared net *specialise* per position (a centre-back and a striker
+/// should not share one averaged `π`). Gated by
+/// `SoccerNeuralBlendConfig::policy_role_embedding`; OFF by default, where the
+/// actor input is the base feature vector unchanged (byte-identical).
+const SOCCER_POLICY_ROLE_EMBED_DIM: usize = 4;
+
+/// One-hot encoding of a player's role for the actor role embedding. Index order
+/// is fixed (GK, DEF, MID, FWD) and must stay stable so a persisted/resumed actor
+/// keeps the same role columns.
+fn soccer_policy_role_one_hot(role: PlayerRole) -> [f64; SOCCER_POLICY_ROLE_EMBED_DIM] {
+    let mut one_hot = [0.0; SOCCER_POLICY_ROLE_EMBED_DIM];
+    let index = match role {
+        PlayerRole::Goalkeeper => 0,
+        PlayerRole::Defender => 1,
+        PlayerRole::Midfielder => 2,
+        PlayerRole::Forward => 3,
+    };
+    one_hot[index] = 1.0;
+    one_hot
+}
 /// Learned **world model** `P̂(s'|s,a)` hyperparameters. The model regresses the
 /// next state's feature vector from the current (state ⊕ action) features,
 /// enabling 1-step model-based value look-ahead (Dyna-style).
