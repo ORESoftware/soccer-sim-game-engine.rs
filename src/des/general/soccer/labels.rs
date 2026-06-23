@@ -217,6 +217,7 @@ impl SoccerActionLabel {
             "fake-left-cut-right" => SoccerActionLabel::FakeLeftCutRight,
             "fake-right-cut-left" => SoccerActionLabel::FakeRightCutLeft,
             "xavi-turn" => SoccerActionLabel::XaviTurn,
+            "open-passing-lane" => SoccerActionLabel::OpenPassingLane,
             "vertical-attack" => SoccerActionLabel::VerticalAttack,
             "turnover-burst" => SoccerActionLabel::TurnoverBurst,
             "wait-for-support" => SoccerActionLabel::WaitForSupport,
