@@ -1331,6 +1331,7 @@ fn mpc_execution_estimate_for_action(
             | "right-cut"
             | "nutmeg"
             | "xavi-turn"
+            | "open-passing-lane"
             | "fake-left-cut-right"
             | "fake-right-cut-left"
             | "protect-ball"
