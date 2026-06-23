@@ -32650,4 +32650,3 @@ impl WorldSnapshot {
         }
     }
 }
-// autosave capture probe
