@@ -1770,6 +1770,12 @@ fn mpc_execution_estimate_for_action(
                 (0.46 + dribble_skill * 0.26 + target_space_fit * 0.18 - pressure * 0.12)
                     .clamp(0.18, 0.97)
             }
+            "round-the-keeper" => {
+                // A short carry to a closer spot with a clear strike past the keeper — feasible;
+                // scales with control + the space at the spot, lightly damped by pressure.
+                (0.48 + dribble_skill * 0.24 + target_space_fit * 0.18 - pressure * 0.10)
+                    .clamp(0.18, 0.97)
+            }
             "protect-ball" => (0.34 + dribble_skill * 0.28 + pressure * 0.22).clamp(0.10, 0.94),
             "open-pass-lane" => {
                 let situational_boost = open_lane_situation
