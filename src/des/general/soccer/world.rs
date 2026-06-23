@@ -22595,6 +22595,7 @@ impl WorldSnapshot {
                     - reception_teammate_penalty
                     - reception_congestion_penalty
                     - direct_opponent_aim_penalty
+                    - direct_opponent_aim_veto
                     - pointless_short_pass_penalty
                     - build_up_short_pass_penalty
                     - pass_quality.lane_interception_risk * PASS_LANE_DYNAMIC_RISK_SCORE_PENALTY
