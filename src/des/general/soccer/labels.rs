@@ -164,11 +164,7 @@ impl SoccerActionLabel {
             SoccerActionLabel::TurnoverBurst => "turnover-burst",
             SoccerActionLabel::WaitForSupport => "wait-for-support",
             SoccerActionLabel::OpenPassLane => "open-pass-lane",
-<<<<<<< HEAD
-            SoccerActionLabel::RoundTheKeeper => "round-the-keeper",
-=======
             SoccerActionLabel::RoundGoalkeeper => "round-goalkeeper",
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
             SoccerActionLabel::Space => "space",
             SoccerActionLabel::SupportShape => "support-shape",
             SoccerActionLabel::SupportRoam => "support-roam",
