@@ -28040,12 +28040,14 @@ fn policy_head_advantage_gradient_prefers_the_reinforced_family() {
                     action_index: reinforced,
                     advantage: 1.0,
                     old_action_probability: None,
+                    role: PlayerRole::Midfielder,
                 },
                 SoccerPolicySample {
                     state_features: state,
                     action_index: penalised,
                     advantage: -1.0,
                     old_action_probability: None,
+                    role: PlayerRole::Midfielder,
                 },
             ]
         })
