@@ -43606,6 +43606,12 @@ fn dd_soccer_disable_dribble_open_lane() -> bool {
     *V.get_or_init(|| std::env::var("DD_SOCCER_DISABLE_DRIBBLE_OPEN_LANE").is_ok())
 }
 
+fn dd_soccer_disable_round_the_keeper() -> bool {
+    use std::sync::OnceLock;
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("DD_SOCCER_DISABLE_ROUND_THE_KEEPER").is_ok())
+}
+
 /// Whether the `xavi-turn` shielded-pirouette dribble move is live for this match: on
 /// unless the process-wide `DD_SOCCER_DISABLE_XAVI_TURN` env flag or the per-match config
 /// field disables it. Mirrored onto [`WorldSnapshot::xavi_turn_enabled`] so the decision
