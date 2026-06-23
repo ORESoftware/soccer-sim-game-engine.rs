@@ -33516,7 +33516,8 @@ impl WorldSnapshot {
                 {
                     continue;
                 }
-                if let Some(save_spot) = self.best_shot_save_probability_from(me.team, spot, shot_speed)
+                if let Some(save_spot) =
+                    self.best_shot_save_probability_from(me.team, spot, shot_speed, skill)
                 {
                     if save_spot <= ROUND_KEEPER_CLEAR_SAVE_THRESHOLD {
                         return Some((spot, sprint));
