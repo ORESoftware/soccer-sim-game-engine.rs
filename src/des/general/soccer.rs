@@ -30414,6 +30414,10 @@ pub(crate) struct SoccerPolicyHead {
     network: FeedForwardNetwork,
     training_steps: usize,
     last_loss: Option<f64>,
+    /// When true the network input is `SOCCER_NEURAL_FEATURE_DIM + SOCCER_POLICY_ROLE_EMBED_DIM`
+    /// and every train/inference call appends the acting player's role one-hot. Fixed at
+    /// construction (the input width can't change after the net is built).
+    role_embedding: bool,
 }
 
 impl SoccerPolicyHead {
