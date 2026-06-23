@@ -409,10 +409,6 @@ impl SoccerActionLabel {
             "leftcut" | "left_cut" | "left-cut-dribble" | "cut-left" => "left-cut",
             "rightcut" | "right_cut" | "right-cut-dribble" | "cut-right" => "right-cut",
             "nut-meg" | "nut_meg" | "meg" => "nutmeg",
-<<<<<<< HEAD
-            "xavi" | "xaviturn" | "xavi_turn" | "xavi-turn-dribble" | "xavi_turn_dribble"
-            | "la-pelopina" | "la_pelopina" | "shielded-turn" | "shielded_turn"
-=======
             "xavi"
             | "xaviturn"
             | "xavi_turn"
@@ -423,7 +419,6 @@ impl SoccerActionLabel {
             | "la_pelopina"
             | "shielded-turn"
             | "shielded_turn"
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
             | "turn-and-shield" => "xavi-turn",
             "fake_left_cut_right" | "fake-left-right" | "fake-left-cut-right-dribble" => {
                 "fake-left-cut-right"
