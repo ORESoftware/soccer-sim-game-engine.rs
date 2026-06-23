@@ -7988,14 +7988,8 @@ impl SoccerMatch {
                 Some(DribbleMoveKind::CarryForward) => 0.78,
                 Some(DribbleMoveKind::CarryOutLeft | DribbleMoveKind::CarryOutRight) => 0.86,
                 Some(DribbleMoveKind::ProtectBall) => 0.48,
-<<<<<<< HEAD
-                // Shielded pirouette: a slightly larger touch than the static protect-ball
-                // shield, to keep the ball tracking the body around the long 300° orbit.
-                Some(DribbleMoveKind::XaviTurn) => 0.62,
-=======
                 // Close-control shielded turn: keep the ball glued to the feet.
                 Some(DribbleMoveKind::XaviTurn) => 0.42,
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
                 Some(DribbleMoveKind::Nutmeg) => 1.18,
                 Some(DribbleMoveKind::LeftCut | DribbleMoveKind::RightCut) => 1.04,
                 Some(DribbleMoveKind::FakeLeftCutRight | DribbleMoveKind::FakeRightCutLeft) => 1.10,
