@@ -33453,7 +33453,7 @@ impl WorldSnapshot {
         let shot_speed = shot_speed_yps_from_power(shot_power_for_skill(skill), &me.skills);
 
         // Only act when the keeper is genuinely covering the direct shot right now.
-        let save_now = self.best_shot_save_probability_from(me.team, from, shot_speed)?;
+        let save_now = self.best_shot_save_probability_from(me.team, from, shot_speed, skill)?;
         if save_now < ROUND_KEEPER_BLOCKED_SAVE_THRESHOLD {
             return None;
         }
