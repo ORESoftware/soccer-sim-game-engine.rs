@@ -28821,7 +28821,6 @@ fn policy_head_mappo_clip_bounds_old_policy_ratio() {
         action_index,
         advantage: -2.0,
         old_action_probability: Some(current_probability * 10.0),
-        role: PlayerRole::Midfielder,
     };
     let negative = head.clipped_mappo_advantage(&negative_sample, 0.2);
     assert!(
