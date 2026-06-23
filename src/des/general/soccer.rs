@@ -12649,6 +12649,16 @@ impl SoccerNeuralLearningConfig {
         }
     }
 
+    /// MAPPO team-reward share, clamped to `[0, 1]`; a non-finite value falls
+    /// back to the individual-reward objective (`0.0`).
+    fn sanitized_mappo_team_reward_share(&self) -> f64 {
+        if self.mappo_team_reward_share.is_finite() {
+            self.mappo_team_reward_share.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
     fn sanitized_target_scale(&self) -> f64 {
         if self.target_scale.is_finite() && self.target_scale.abs() > 1e-9 {
             self.target_scale.abs()
