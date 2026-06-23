@@ -4405,7 +4405,9 @@ impl SoccerMatch {
                 let old_action_probability = self
                     .policy_head
                     .as_ref()
-                    .and_then(|head| head.action_distribution(&state_features))
+                    .and_then(|head| {
+                        head.action_distribution_for_role(&state_features, transition.role)
+                    })
                     .and_then(|probs| probs.get(action_index).copied())
                     .filter(|probability| probability.is_finite() && *probability > 0.0);
                 advantage.is_finite().then(|| SoccerPolicySample {
@@ -4413,6 +4415,7 @@ impl SoccerMatch {
                     action_index,
                     advantage,
                     old_action_probability,
+                    role: transition.role,
                 })
             })
             .collect()
