@@ -12815,7 +12815,6 @@ impl Default for SoccerNeuralBlendConfig {
             candidates: default_soccer_neural_blend_candidates(),
             warmup_steps: default_soccer_neural_blend_warmup_steps(),
             actor_critic: false,
-            policy_role_embedding: false,
             world_model: false,
             mcts_enabled: false,
             mcts_simulations: default_soccer_neural_mcts_simulations(),
