@@ -16328,6 +16328,24 @@ pub(crate) fn dd_soccer_disable_spacing_nudge() -> bool {
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("DD_SOCCER_DISABLE_SPACING_NUDGE").is_ok())
 }
+/// Tactical model-based look-ahead depth for the value blend (`neural_blended_action`):
+/// AlphaZero/MuZero-style planning that rolls the learned world model (`predict_next`)
+/// forward from each candidate action and scores the predicted state with the critic,
+/// instead of scoring the current state-action directly. `0` (the default, env unset)
+/// = OFF: every candidate is scored at depth-0 exactly as before, so play is
+/// byte-identical. `>= 1` rolls the world model forward one step per candidate (and
+/// requires a trained dynamics model — `neural_blend.world_model`; the caller forces
+/// depth-0 when none is present). Read once per process (no per-tick env syscall).
+pub(crate) fn dd_soccer_lookahead_depth() -> usize {
+    use std::sync::OnceLock;
+    static V: OnceLock<usize> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("DD_SOCCER_LOOKAHEAD_DEPTH")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .unwrap_or(0)
+    })
+}
 // While an aerial 50:50 is in flight TOWARD the opponent's goal (no settled holder), the
 // goal-side defensive drop is suppressed for off-ball players so mid/forwards keep pushing
 // up rather than turning and chasing their own goal under a ball that is going the other
