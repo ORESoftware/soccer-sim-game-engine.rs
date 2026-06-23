@@ -87,10 +87,15 @@ pub enum SoccerActionLabel {
     /// On-ball: a short carrier dribble to change the passing angle and open a
     /// currently-blocked teammate lane.
     OpenPassLane,
+<<<<<<< HEAD
     /// On-ball: a short, quick carry around the goalkeeper — closer to goal and off the
     /// keeper's covered angle — to open a clear shot, instead of a long shot the keeper
     /// saves. See `WorldSnapshot::dribble_round_the_keeper_for`.
     RoundTheKeeper,
+=======
+    /// On-ball: dribble around the goalkeeper to open a closer shooting lane.
+    RoundGoalkeeper,
+>>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
     // --- off-ball: support / movement ---
     Space,
     SupportShape,
@@ -163,7 +168,11 @@ impl SoccerActionLabel {
             SoccerActionLabel::TurnoverBurst => "turnover-burst",
             SoccerActionLabel::WaitForSupport => "wait-for-support",
             SoccerActionLabel::OpenPassLane => "open-pass-lane",
+<<<<<<< HEAD
             SoccerActionLabel::RoundTheKeeper => "round-the-keeper",
+=======
+            SoccerActionLabel::RoundGoalkeeper => "round-goalkeeper",
+>>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
             SoccerActionLabel::Space => "space",
             SoccerActionLabel::SupportShape => "support-shape",
             SoccerActionLabel::SupportRoam => "support-roam",
@@ -231,7 +240,11 @@ impl SoccerActionLabel {
             "turnover-burst" => SoccerActionLabel::TurnoverBurst,
             "wait-for-support" => SoccerActionLabel::WaitForSupport,
             "open-pass-lane" => SoccerActionLabel::OpenPassLane,
+<<<<<<< HEAD
             "round-the-keeper" => SoccerActionLabel::RoundTheKeeper,
+=======
+            "round-goalkeeper" => SoccerActionLabel::RoundGoalkeeper,
+>>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
             "space" => SoccerActionLabel::Space,
             "support-shape" => SoccerActionLabel::SupportShape,
             "support-roam" => SoccerActionLabel::SupportRoam,
@@ -341,6 +354,7 @@ impl SoccerActionLabel {
             | "dribble-to-pass"
             | "dribble_to_pass"
             | "dribbletopass" => "open-pass-lane",
+<<<<<<< HEAD
             "round-the-keeper"
             | "round_the_keeper"
             | "roundthekeeper"
@@ -350,6 +364,20 @@ impl SoccerActionLabel {
             | "rounding-the-keeper"
             | "dribble-round-keeper"
             | "beat-the-keeper" => "round-the-keeper",
+=======
+            "round-goalkeeper"
+            | "round_goalkeeper"
+            | "roundgoalkeeper"
+            | "round-the-goalkeeper"
+            | "round_the_goalkeeper"
+            | "roundthegoalkeeper"
+            | "round-gk"
+            | "round_gk"
+            | "beat-keeper"
+            | "beat_keeper"
+            | "dribble-around-keeper"
+            | "dribble_around_keeper" => "round-goalkeeper",
+>>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
             "turnover-burst"
             | "turnover_burst"
             | "turnoverburst"
