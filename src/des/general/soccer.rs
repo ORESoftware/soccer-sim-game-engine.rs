@@ -43343,14 +43343,9 @@ fn carried_ball_orbit_command(
         }
         // XAVI TURN: like the shield, the ball is held on the FAR side of the defender —
         // but swept a touch faster so it tracks the body as the carrier wheels ~290° the
-<<<<<<< HEAD
         // long way around. It arcs AROUND the body (never through, the `true` long-orbit
         // flag), capped at the 300° max orbit, and the long protective path emerges as the
         // carrier's pivot keeps rotating the shield bearing.
-=======
-        // long way around. It arcs AROUND the body (never through), and the long protective
-        // path emerges as the carrier's pivot keeps rotating the shield bearing.
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
         Some(DribbleMoveKind::XaviTurn) => (
             xavi_turn_dir(),
             false,
