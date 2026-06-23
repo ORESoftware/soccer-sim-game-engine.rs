@@ -12633,6 +12633,14 @@ pub struct SoccerNeuralBlendConfig {
     /// biases action selection on top of the value blend. Off by default.
     #[serde(default)]
     pub actor_critic: bool,
+    /// Append a [`SOCCER_POLICY_ROLE_EMBED_DIM`]-wide role one-hot (GK/DEF/MID/FWD)
+    /// to the shared actor's input so one parameter-shared policy net specialises
+    /// per position. Off by default → the actor consumes the base feature vector
+    /// exactly as before, so a run that does not opt in is byte-identical. Only the
+    /// actor widens; the centralized critic and world model are untouched. Has no
+    /// effect unless `actor_critic` is also on.
+    #[serde(default)]
+    pub policy_role_embedding: bool,
     /// Train the learned **world model** `P̂(s'|s,a)` on the episode replay. Off
     /// by default. (Used for model-based value look-ahead / diagnostics; it does
     /// not alter action selection on its own.)
