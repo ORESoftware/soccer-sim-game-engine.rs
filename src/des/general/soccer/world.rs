@@ -17989,6 +17989,80 @@ impl WorldSnapshot {
         (directness * control_fit * fast_bypass_relief).clamp(0.0, 1.0)
     }
 
+    /// True when a ground/low pass to `pass_point` concedes the reception to an opponent:
+    /// the nearest opponent to the reception point is inside the contest radius, is level
+    /// with or in front of the intended receiver (toward the ball), and can REACH the
+    /// arriving ball. This is the man-marked-receiver / ball-to-an-opponent's-feet case
+    /// that [`Self::pass_point_directly_favors_opponent`] and
+    /// [`Self::pass_point_direct_opponent_control_risk`] both miss, because they only model
+    /// an opponent who is strictly CLOSER to the aim than the receiver and so return zero
+    /// when the receiver is himself at the aim point with a marker shadowing him.
+    ///
+    /// A defender essentially on the ball (within `AT_FEET`) is always a concession; a
+    /// looser marker is only a hard concession when `passer_pressure` is real, so a brave
+    /// pass to a half-open man and a contested final-third reception to an OPEN receiver are
+    /// left to the soft congestion penalty rather than hard-vetoed.
+    pub(crate) fn pass_reception_conceded_to_opponent(
+        &self,
+        team: Team,
+        receiver_position: Vec2,
+        pass_origin: Vec2,
+        pass_point: Vec2,
+        ball_speed_yps: f64,
+        passer_pressure: f64,
+    ) -> bool {
+        let Some((opponent_id, opponent_position, opponent_distance)) =
+            self.nearest_opponent_at(team, pass_point)
+        else {
+            return false;
+        };
+        if !opponent_distance.is_finite()
+            || opponent_distance > PASS_RECEPTION_CONCEDE_CONTEST_RADIUS_YARDS
+        {
+            return false;
+        }
+        // The opponent must be level with or in front of the receiver toward the ball; if the
+        // receiver is clearly first to it, it is a winnable contested reception, not conceded.
+        let receiver_distance = receiver_position.distance(pass_point);
+        if opponent_distance > receiver_distance + PASS_RECEPTION_CONCEDE_FRONT_MARGIN_YARDS {
+            return false;
+        }
+        // Can the opponent reach the arriving ball? Reuse the lane-arrival + sprint-reach
+        // model so a slow/distant marker, or a ball driven past quickly, does not trip it.
+        let speed = ball_speed_yps.max(REACTIVE_GROUND_PASS_MIN_SPEED_YPS);
+        let lane = pass_point - pass_origin;
+        let lane_len = lane.len();
+        let ball_arrival = if lane_len < 1e-3 {
+            0.0
+        } else {
+            let dir = lane * (1.0 / lane_len);
+            let along = (opponent_position - pass_origin)
+                .dot(dir)
+                .clamp(0.0, lane_len);
+            along / speed
+        };
+        let reachable = if opponent_distance <= PASS_RECEPTION_CONCEDE_AT_FEET_RADIUS_YARDS {
+            true
+        } else if let Some(opponent) = self.players.iter().find(|p| p.id == opponent_id) {
+            let sprint_speed = (player_top_speed_yps(opponent.role, &opponent.skills)
+                * fatigue_speed_factor(opponent.skills.stamina, opponent.fatigue)
+                * MovementGait::Sprint.speed_multiplier())
+            .max(0.85);
+            let reaction_window = (ball_arrival - PASS_LANE_INTERCEPT_REACTION_SECONDS)
+                .clamp(0.0, PASS_LANE_INTERCEPT_MAX_WINDOW_SECONDS);
+            opponent_distance <= INTERCEPT_LUNGE_REACH_YARDS + sprint_speed * reaction_window
+        } else {
+            false
+        };
+        if !reachable {
+            return false;
+        }
+        // A defender glued to the ball is always a concession (covers the ball-to-opponent's
+        // -feet bug). A looser marker is only a hard concession under real passer pressure.
+        opponent_distance <= PASS_RECEPTION_CONCEDE_AT_FEET_RADIUS_YARDS
+            || passer_pressure >= IN_BEHIND_SPRINT_PRESSURE
+    }
+
     /// Score the shot **placement** as a discrete decision instead of defaulting to the
     /// goal centre (where the keeper usually stands). Sweeps placement buckets across the
     /// goal mouth — just inside each post — and returns the goal-line x the opposing keeper
