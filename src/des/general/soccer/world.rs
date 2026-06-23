@@ -4323,55 +4323,17 @@ impl SoccerMatch {
         // Per-tick team reward aggregation for centralized MARL shaping.
         let tick_rewards = soccer_marl_tick_rewards(replay);
 
-<<<<<<< HEAD
-        // MAPPO cooperative-credit share: blend each agent's individual reward
-        // toward its team's per-tick mean before the zero-sum opponent centering.
-        // `0.0` (default) keeps the fully individual reward — byte-identical to the
-        // pre-MAPPO objective.
-        let team_reward_share = self
-            .config
-            .neural_learning
-            .sanitized_mappo_team_reward_share();
-
-        // Per-transition row: opponent-centered reward, critic value (in reward
-        // units), terminal flag, action index, and state features.
-        let opponent_centered_reward = |transition: &SoccerLearningTransition| -> f64 {
-            let (home_sum, home_count, away_sum, away_count) = tick_rewards
-                .get(&transition.tick)
-                .copied()
-                .unwrap_or_default();
-            let home_avg = if home_count == 0 {
-                0.0
-            } else {
-                home_sum / f64::from(home_count)
-            };
-            let away_avg = if away_count == 0 {
-                0.0
-            } else {
-                away_sum / f64::from(away_count)
-            };
-            let (own_avg, opponent_avg) = match transition.team {
-                Team::Home => (home_avg, away_avg),
-                Team::Away => (away_avg, home_avg),
-            };
-            // (1-w)·rᵢ + w·r̄_team — the shared-return convex blend. At w=0 this is
-            // exactly the individual reward, so the result is unchanged.
-            let individual = finite_metric(transition.reward);
-            let shared = (1.0 - team_reward_share) * individual + team_reward_share * own_avg;
-            shared - opponent_avg
-        };
-
-        let reward_adv: Vec<f64> = replay.iter().map(opponent_centered_reward).collect();
-=======
-        // Per-transition row: MARL-adjusted reward, critic value (in reward
-        // units), terminal flag, action index, and state features.
+        // Per-transition reward advantage. Both convergent cooperative-MARL shapings are unified in
+        // `soccer_marl_adjusted_reward`: ours' MAPPO team-reward SHARE blends each agent's reward
+        // toward its team's per-tick mean, and theirs' centralized weighting then scales that
+        // (intermediate) signal and adds the zero-sum (own − opponent) team component. Each knob
+        // reduces to a no-op at its default, so the default path is byte-identical to before.
         let reward_adv: Vec<f64> = replay
             .iter()
             .map(|transition| {
                 soccer_marl_adjusted_reward(transition, &tick_rewards, &self.config.neural_learning)
             })
             .collect();
->>>>>>> origin/alex-1
         let values: Vec<f64> = replay
             .iter()
             .map(|transition| {
