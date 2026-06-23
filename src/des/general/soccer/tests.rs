@@ -27549,7 +27549,9 @@ fn clean_twenty_yard_window_forces_shot_even_below_quality_gate() {
 }
 
 #[test]
-fn elite_shot_speed_can_reach_sixty_mph_cap() {
+fn elite_shot_speed_reaches_seventy_near_the_cap() {
+    // Shots now leave the boot at 50-72 mph (clearly faster than any pass). An elite full-power
+    // strike reaches ~70 mph, just under the 72 mph hard cap.
     let skills = SkillProfile {
         shooting: 10.0,
         right_foot_shot_power: 10.0,
@@ -27560,8 +27562,8 @@ fn elite_shot_speed_can_reach_sixty_mph_cap() {
 
     let speed = shot_speed_yps_from_power(shot_power_for_skill(1.0), &skills);
 
-    assert!(speed <= mph_to_yps(60.0) + 1e-9);
-    assert!(speed >= mph_to_yps(59.0));
+    assert!(speed <= mph_to_yps(72.0) + 1e-9);
+    assert!(speed >= mph_to_yps(69.0));
 }
 
 #[test]
