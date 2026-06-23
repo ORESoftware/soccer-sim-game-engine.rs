@@ -8901,7 +8901,12 @@ impl SoccerQPolicy {
             player.role,
         );
         let action = normalize_soccer_action_label(action);
-        candidates
+        // Re-ranking the candidate pool here would otherwise silently bypass the ranker's
+        // concede veto (it only DEMOTES a conceded target, never removes it — see
+        // `ranked_pass_targets_filtered_full`), which is how a learned policy could still pick a
+        // pass straight to an opponent or into a tightly-marked man. Flag each candidate and
+        // refuse to commit to a (perceived) conceded one while any clean option remains.
+        let scored: Vec<(usize, f64, bool)> = candidates
             .iter()
             .filter_map(|candidate_id| {
                 let target = snapshot.players.iter().find(|p| p.id == *candidate_id)?;
@@ -8924,13 +8929,24 @@ impl SoccerQPolicy {
                     + quality.mpc_receipt_probability * 0.52
                     + quality.stride_fit * 0.22
                     + quality.receiver_openness * 0.20;
-                Some((*candidate_id, score))
+                let concedes = snapshot.pass_target_concedes_to_perceived_opponent(
+                    player_id,
+                    *candidate_id,
+                    flight,
+                );
+                Some((*candidate_id, score, concedes))
             })
-            .max_by(|a, b| {
-                a.1.total_cmp(&b.1)
-                    .then_with(|| b.0.cmp(&a.0))
-            })
-            .map(|(candidate_id, _)| candidate_id)
+            .collect();
+        let pick = |require_clean: bool| {
+            scored
+                .iter()
+                .filter(|(_, _, concedes)| !require_clean || !*concedes)
+                .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+                .map(|(candidate_id, _, _)| *candidate_id)
+        };
+        // Only fall back to the least-bad conceded target when EVERY candidate concedes
+        // (genuinely no safe pass — the holder should usually be dribbling/holding/clearing then).
+        pick(true).or_else(|| pick(false))
     }
 
     fn best_action_filtered<F>(&self, state: &SoccerQStateKey, is_legal: F) -> Option<String>
