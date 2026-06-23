@@ -460,16 +460,24 @@ const OPEN_LANE_DRIBBLE_MAX_PASS_YARDS: f64 = 42.0;
 // Corridor half-width: an opponent within this of the lane segment blocks it (and after the step
 // the new lane must have NO opponent within it to count as opened).
 const OPEN_LANE_DRIBBLE_CORRIDOR_YARDS: f64 = 1.8;
-// Candidate sideways step sizes (yards), smallest first — the least dribble that opens the lane is
-// chosen. The carrier SPRINTS this short distance to make the angle quickly.
-const OPEN_LANE_DRIBBLE_STEP_YARDS: [f64; 4] = [1.0, 2.0, 3.0, 4.0];
+// Candidate step sizes (yards), smallest first — the least carry that opens the lane is chosen.
+// 1-8yd: a yard or two is usually enough to shift the angle off a tight blocker, but a wider step
+// is allowed when the blocker sits deeper in the lane and needs more displacement.
+const OPEN_LANE_DRIBBLE_STEP_YARDS: [f64; 6] = [1.5, 3.0, 4.5, 6.0, 7.0, 8.0];
 // A step is rejected if it would dribble straight onto another opponent (must have this much space).
 const OPEN_LANE_DRIBBLE_MIN_SPOT_SPACE_YARDS: f64 = 1.6;
-// Decision appetite: a solid option (it keeps the ball AND creates a pass) but not so high it
-// overrides an already-clear direct pass — which outranks it, since this is only offered when the
-// good targets are BLOCKED.
+// Sprint (vs a controlled run) when the carrier is under very high pressure, OR when the nearest
+// opponent is tracking quickly toward it (closing speed ≥ this) — then burst to make the angle
+// before the lane re-closes / to exceed the tracker's pace. Otherwise run (conserve energy).
+const OPEN_LANE_DRIBBLE_SPRINT_PRESSURE: f64 = 0.60;
+const OPEN_LANE_DRIBBLE_SPRINT_TRACK_YPS: f64 = 4.5;
+// Decision (MDP/POMDP) appetite: a solid option (it keeps the ball AND creates a pass), lifted by
+// pressure and by how PROGRESSIVE the opened pass is (an upfield receiver is worth more than a
+// backward one), but capped so it never overrides an already-clear direct pass — which outranks it,
+// since this is only offered when the good targets are BLOCKED.
 const OPEN_LANE_DRIBBLE_BASE_APPETITE: f64 = 0.62;
-const OPEN_LANE_DRIBBLE_MAX_APPETITE: f64 = 1.05;
+const OPEN_LANE_DRIBBLE_MAX_APPETITE: f64 = 1.20;
+const OPEN_LANE_DRIBBLE_UPFIELD_APPETITE_BONUS: f64 = 0.40;
 /// Below this tangential speed (yps) a `xavi-turn` carrier is treated as not yet wheeling, so
 /// the wheel sense is seeded from geometry rather than from its (negligible) momentum.
 const XAVI_TURN_WHEEL_MOMENTUM_EPS_YPS: f64 = 0.5;
