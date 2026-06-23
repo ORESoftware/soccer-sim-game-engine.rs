@@ -46791,13 +46791,12 @@ const GRAVITY_YPS2: f64 = 9.81 / METERS_PER_YARD;
 
 fn pass_loft_apex_yards(pass: &PendingPass) -> f64 {
     if pass.flight.is_scoop() {
-        // A scoop LOOPS high despite being short and slow — that steep loft drops it over the
-        // close defender's head. Apex UNIFORM in 9-15ft (3-5yd), seeded per-pass from the
-        // launch tick so it's stable across the flight but varies shot to shot.
-        let seed = pass.launch_tick.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            ^ (pass.from as u64).wrapping_shl(17);
-        let unit = ((seed >> 40) & 0xFFFF) as f64 / 65535.0;
-        3.0 + unit * 2.0
+        // A scoop is a delicate SHORT chip over a close defender: it clears the block but must
+        // drop ONTO the receiver, so the apex is modest and FIXED (deterministic) and the launch
+        // pace is calibrated to land the ball at the target within this hang time
+        // (`modulated_pass_speed_yps`). A higher/random apex on a fixed-slow pace ballooned the
+        // ball clean over a near receiver — the "helium balloon" float.
+        SCOOP_LOFT_APEX_YARDS
     } else {
         // A real lofted pass: shorter ones peak around ~20ft (`SHORT_LOFT_APEX_YARDS`) and
         // they scale up with distance to the ~30ft (`MAX_LOFT_APEX_YARDS`) ceiling for the
