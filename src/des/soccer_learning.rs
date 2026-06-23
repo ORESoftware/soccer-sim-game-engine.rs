@@ -682,6 +682,11 @@ pub fn validate_soccer_neural_learning_config_for_learning_run(
             "criticBaselineWeight must be in [0, 1] when neural learning is enabled".to_string(),
         );
     }
+    if !(0.0..=1.0).contains(&config.mappo_team_reward_share) {
+        return Err(
+            "mappoTeamRewardShare must be in [0, 1] when neural learning is enabled".to_string(),
+        );
+    }
     Ok(())
 }
 
