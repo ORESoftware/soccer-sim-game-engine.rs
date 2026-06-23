@@ -437,7 +437,6 @@ const XAVI_TURN_MIN_PRESSURE: f64 = 0.34;
 /// A `xavi-turn` is suppressed when the carrier is this close to its OWN goal — wheeling and
 /// turning your back deep in your own defensive third gifts chances; clear/shield instead.
 const XAVI_TURN_MIN_OWN_GOAL_YARDS: f64 = 30.0;
-<<<<<<< HEAD
 /// Base and ceiling for the `xavi-turn` decision appetite. Sized to clear the strong
 /// pressured-holder shield floor (`protect-ball`, kept deliberately high on this base to
 /// stop panic passes) only for a genuinely WORLD-CLASS carrier (dribbling ~9+) in the
@@ -448,14 +447,6 @@ const XAVI_TURN_MIN_OWN_GOAL_YARDS: f64 = 30.0;
 /// static-shield floor.
 const XAVI_TURN_BASE_APPETITE: f64 = 0.95;
 const XAVI_TURN_MAX_APPETITE: f64 = 2.60;
-=======
-/// Base and ceiling for the `xavi-turn` decision appetite. Strongly skill-gated so only a
-/// genuinely technical carrier in the niche (tight goal-side defender, blocked forward,
-/// under pressure) reaches the high end — where it can edge out a side-step / cut and rival
-/// a static shield — while a low-skill carrier stays well below them and never turns.
-const XAVI_TURN_BASE_APPETITE: f64 = 0.55;
-const XAVI_TURN_MAX_APPETITE: f64 = 1.45;
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
 /// Below this tangential speed (yps) a `xavi-turn` carrier is treated as not yet wheeling, so
 /// the wheel sense is seeded from geometry rather than from its (negligible) momentum.
 const XAVI_TURN_WHEEL_MOMENTUM_EPS_YPS: f64 = 0.5;
