@@ -149,6 +149,7 @@ impl SoccerActionLabel {
             SoccerActionLabel::RightCut => "right-cut",
             SoccerActionLabel::Nutmeg => "nutmeg",
             SoccerActionLabel::XaviTurn => "xavi-turn",
+            SoccerActionLabel::OpenPassingLane => "open-passing-lane",
             SoccerActionLabel::FakeLeftCutRight => "fake-left-cut-right",
             SoccerActionLabel::FakeRightCutLeft => "fake-right-cut-left",
             SoccerActionLabel::VerticalAttack => "vertical-attack",
