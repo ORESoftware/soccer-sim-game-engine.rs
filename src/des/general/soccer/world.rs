@@ -16927,10 +16927,7 @@ impl WorldSnapshot {
             trace_mdp_mpc_comparison: options.trace_mdp_mpc_comparison,
             slide_tackle_enabled: slide_tackle_enabled(&m.config),
             xavi_turn_enabled: xavi_turn_enabled(&m.config),
-<<<<<<< HEAD
-=======
             obstacle_aware_intercept_enabled: obstacle_aware_intercept_enabled(&m.config),
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
             pass_anticipation_enabled: m.config.pass_anticipation_enabled,
             local_mpc_max_players_per_team: m.config.local_mpc_max_players_per_team,
             home_team_possession_seconds,
