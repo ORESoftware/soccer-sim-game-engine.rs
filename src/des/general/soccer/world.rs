@@ -33391,6 +33391,7 @@ impl WorldSnapshot {
         shooting_team: Team,
         shooter_pos: Vec2,
         shot_speed_yps: f64,
+        shooting_skill: f64,
     ) -> Option<f64> {
         if !shooter_pos.x.is_finite() || !shooter_pos.y.is_finite() {
             return None;
@@ -33398,12 +33399,13 @@ impl WorldSnapshot {
         let keeper_id = self.goalkeeper_for(shooting_team.other())?;
         let keeper = self.players.iter().find(|p| p.id == keeper_id)?;
         let goal_y = shooting_team.goal_y(self.field_length);
-        let skill = ability01(self.players.iter().find(|p| self.ball.holder == Some(p.id)).map_or(
-            keeper.skills.shooting,
-            |shooter| shooter.skills.shooting,
-        ));
-        let best_x =
-            self.scored_shot_placement_x(shooting_team, shooter_pos, goal_y, shot_speed_yps, skill);
+        let best_x = self.scored_shot_placement_x(
+            shooting_team,
+            shooter_pos,
+            goal_y,
+            shot_speed_yps,
+            shooting_skill.clamp(0.0, 1.0),
+        );
         let crossing = Vec2::new(best_x, goal_y);
         let keeper_pos = self.player_snapshot_position(keeper);
         let keeper_vel = self.player_velocity(keeper.id).unwrap_or(keeper.velocity);
