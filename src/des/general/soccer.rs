@@ -12609,6 +12609,7 @@ impl Default for SoccerNeuralLearningConfig {
             snapshot_every_batches: DEFAULT_SOCCER_NEURAL_SNAPSHOT_EVERY_BATCHES,
             lp_coupling_enabled: false,
             critic_baseline_weight: 0.0,
+            mappo_team_reward_share: 0.0,
         }
     }
 }
