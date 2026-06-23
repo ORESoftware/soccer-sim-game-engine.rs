@@ -13108,10 +13108,7 @@ impl Default for MatchConfig {
             disable_tick_order_shuffle: false,
             disable_slide_tackle: false,
             disable_xavi_turn: false,
-<<<<<<< HEAD
-=======
             enable_obstacle_aware_intercept: false,
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
             opponent_belief_enabled: false,
             max_human_players: 4,
             seed: 2026,
