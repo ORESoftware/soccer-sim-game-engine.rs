@@ -4062,6 +4062,10 @@ fn run_soccer_learning_game_from_snapshot(
 ) -> Result<SoccerLearningCompletedGame, String> {
     let started = Instant::now();
     config.seed = config.seed.wrapping_add(episode as u32);
+    // Progressive curriculum (off unless SOCCER_CURRICULUM_ENABLED): reshape this game's
+    // pitch / length / team-reward share / formation by how many games have completed, so
+    // early episodes are tight individual-skill reps and later ones the full 11v11 contest.
+    let _curriculum_stage = maybe_apply_soccer_curriculum_for_episode(episode, &mut config);
     let seed = config.seed as u64;
     let starting_tactical_learning = config.tactical_learning.clone();
     let total_ticks = config.total_ticks();
