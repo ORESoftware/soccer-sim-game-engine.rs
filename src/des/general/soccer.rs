@@ -9710,11 +9710,7 @@ fn dribble_touch_angle_weight(kind: DribbleMoveKind, bucket: u8) -> f64 {
         // the defender (mirrors the protect-ball shielding weighting).
         DribbleMoveKind::XaviTurn => {
             if forward < -0.20 {
-<<<<<<< HEAD
                 1.70
-=======
-                1.85
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
             } else if lateral.abs() > 0.35 {
                 1.40
             } else {
