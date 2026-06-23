@@ -41597,10 +41597,7 @@ fn tracking_frame_to_world_snapshot(
         trace_mdp_mpc_comparison: true,
         slide_tackle_enabled: slide_tackle_enabled(config),
         xavi_turn_enabled: xavi_turn_enabled(config),
-<<<<<<< HEAD
-=======
         obstacle_aware_intercept_enabled: obstacle_aware_intercept_enabled(config),
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
         pass_anticipation_enabled: config.pass_anticipation_enabled,
         local_mpc_max_players_per_team: config.local_mpc_max_players_per_team,
         home_team_possession_seconds: if last_touch_team == Some(Team::Home) {
