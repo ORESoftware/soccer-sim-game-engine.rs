@@ -1805,9 +1805,10 @@ fn mpc_execution_estimate_for_action(
                 (0.46 + dribble_skill * 0.26 + target_space_fit * 0.18 - pressure * 0.12)
                     .clamp(0.18, 0.97)
             }
-            "round-the-keeper" => {
+            "round-goalkeeper" => {
                 // A short carry to a closer spot with a clear strike past the keeper — feasible;
-                // scales with control + the space at the spot, lightly damped by pressure.
+                // scales with control + the space at the spot, lightly damped by pressure. (Ours'
+                // tuned estimate, folded onto the unified round-goalkeeper label during the merge.)
                 (0.48 + dribble_skill * 0.24 + target_space_fit * 0.18 - pressure * 0.10)
                     .clamp(0.18, 0.97)
             }
