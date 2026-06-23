@@ -7366,43 +7366,9 @@ impl PlayerAgent {
                 }
                 open_lane_offered = true;
             }
-            // ROUND THE KEEPER: when the goalkeeper is covering the shot, a short carry closer to
-            // goal (and around the keeper's angle) opens a clear strike — offered in that window so
-            // the carrier dribbles in for a high-percentage shot instead of blazing from distance.
-            let round_the_keeper = if self.role != PlayerRole::Goalkeeper {
-                snapshot.dribble_round_the_keeper_for(self.id)
-            } else {
-                None
-            };
-            let mut round_the_keeper_offered = false;
-            if round_the_keeper.is_some() {
-                let press = observation
-                    .perceived_pressure
-                    .max(observation.pressure_urgency)
-                    .clamp(0.0, 1.0);
-                // Worth more the closer to goal (the clear strike is the prize) and under pressure.
-                let proximity = (1.0
-                    - (observation.yards_to_goal / ROUND_KEEPER_MAX_START_YARDS).clamp(0.0, 1.0))
-                    .clamp(0.0, 1.0);
-                let appetite = (ROUND_KEEPER_BASE_APPETITE
-                    * self.preferences.dribble_bias.clamp(0.5, 1.3)
-                    * (0.6 + proximity * 0.7 + press * 0.3))
-                    .clamp(0.0, ROUND_KEEPER_MAX_APPETITE);
-                if let Some(option) = action_options
-                    .iter_mut()
-                    .find(|option| option.label == "round-the-keeper")
-                {
-                    option.legal = true;
-                    option.score = option.score.max(appetite);
-                } else {
-                    action_options.push(AgentActionOptionTrace::new(
-                        "round-the-keeper",
-                        appetite,
-                        true,
-                    ));
-                }
-                round_the_keeper_offered = true;
-            }
+            // ROUND THE KEEPER is generated above as `round_goalkeeper_plan` (the unified,
+            // plan-based implementation); ours' separate `dribble_round_the_keeper_for` generator
+            // was folded into it during the merge to avoid offering the same carry twice.
             let mut xavi_turn_offered = false;
             if snapshot.xavi_turn_enabled
                 && self.role != PlayerRole::Goalkeeper
