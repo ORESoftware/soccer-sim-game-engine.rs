@@ -42943,12 +42943,6 @@ fn dribble_beat_probability(
         DribbleMoveKind::ProtectBall => 0.46,
         DribbleMoveKind::LeftCut | DribbleMoveKind::RightCut => 1.0,
         DribbleMoveKind::Nutmeg => 0.82,
-<<<<<<< HEAD
-        // Turning a committed defender with a shielded pirouette beats them cleanly more
-        // often than not — they are wrong-footed by the long way around.
-        DribbleMoveKind::XaviTurn => 0.96,
-=======
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
         DribbleMoveKind::FakeLeftCutRight | DribbleMoveKind::FakeRightCutLeft => 1.05,
         // Turning a committed defender with a shielded pirouette beats them cleanly more
         // often than not — they are wrong-footed by the long way around.
