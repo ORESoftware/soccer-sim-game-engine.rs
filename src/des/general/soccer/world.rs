@@ -3163,11 +3163,22 @@ impl SoccerMatch {
             None
         };
 
-        let mut neural_q = |label: &str| -> Option<f64> {
+        // Tactical look-ahead (AlphaZero/MuZero-style planning): when a run opts in
+        // via `DD_SOCCER_LOOKAHEAD_DEPTH >= 1` AND a trained world model is present,
+        // score each candidate by rolling the world model forward (`predict_next`)
+        // and evaluating the predicted state with the critic, rather than scoring the
+        // current state-action directly. Depth 0 — the default, and the forced value
+        // when no world model exists — reproduces the direct depth-0 critic value
+        // byte-for-byte, so play is unchanged unless a run opts in.
+        let lookahead_depth = if self.world_model.is_some() {
+            dd_soccer_lookahead_depth()
+        } else {
+            0
+        };
+        let neural_q = |label: &str| -> Option<f64> {
             let learner = learner?;
-            base.action = label.to_string();
-            let features = soccer_neural_transition_features(&base);
-            learner.predict_value(&features).map(|v| v * target_scale)
+            self.model_based_lookahead_value(&base, label, learner, lookahead_depth)
+                .map(|v| v * target_scale)
         };
         let policy_bonus = |label: &str| -> f64 {
             match &policy_log_probs {
