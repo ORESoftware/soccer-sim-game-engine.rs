@@ -4115,6 +4115,15 @@ impl SoccerMatch {
             }
         }
 
+        // MAPPO cooperative-credit share: blend each agent's individual reward
+        // toward its team's per-tick mean before the zero-sum opponent centering.
+        // `0.0` (default) keeps the fully individual reward — byte-identical to the
+        // pre-MAPPO objective.
+        let team_reward_share = self
+            .config
+            .neural_learning
+            .sanitized_mappo_team_reward_share();
+
         // Per-transition row: opponent-centered reward, critic value (in reward
         // units), terminal flag, action index, and state features.
         let opponent_centered_reward = |transition: &SoccerLearningTransition| -> f64 {
@@ -4132,11 +4141,15 @@ impl SoccerMatch {
             } else {
                 away_sum / f64::from(away_count)
             };
-            let opponent_avg = match transition.team {
-                Team::Home => away_avg,
-                Team::Away => home_avg,
+            let (own_avg, opponent_avg) = match transition.team {
+                Team::Home => (home_avg, away_avg),
+                Team::Away => (away_avg, home_avg),
             };
-            finite_metric(transition.reward) - opponent_avg
+            // (1-w)·rᵢ + w·r̄_team — the shared-return convex blend. At w=0 this is
+            // exactly the individual reward, so the result is unchanged.
+            let individual = finite_metric(transition.reward);
+            let shared = (1.0 - team_reward_share) * individual + team_reward_share * own_avg;
+            shared - opponent_avg
         };
 
         let reward_adv: Vec<f64> = replay.iter().map(opponent_centered_reward).collect();
