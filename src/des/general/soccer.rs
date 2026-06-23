@@ -12979,15 +12979,6 @@ pub struct SoccerNeuralLearningConfig {
     /// PPO clip epsilon for MAPPO actor updates.
     #[serde(default = "default_soccer_mappo_clip_epsilon")]
     pub mappo_clip_epsilon: f64,
-<<<<<<< HEAD
-=======
-    /// MAPPO cooperative-credit share: how much the individual dense reward is
-    /// blended toward the team's per-tick mean before the team-vs-opponent
-    /// component is added. `0.0` keeps the individual reward; `1.0` is a fully
-    /// shared team reward.
-    #[serde(default)]
-    pub mappo_team_reward_share: f64,
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
 }
 
 impl Default for SoccerNeuralLearningConfig {
