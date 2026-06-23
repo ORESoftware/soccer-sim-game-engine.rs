@@ -701,7 +701,12 @@ const SUPPORT_RELAX_FORCED_SHOT_NEARBY_YARDS: f64 = 14.0;
 const SUPPORT_RELAX_FORCED_SHOT_MIN_FLOOR_QUALITY: f64 = 0.54;
 const SUPPORT_RELAX_FORCED_SHOT_MIN_AERIAL_QUALITY: f64 = 0.56;
 const SUPPORT_RELAX_FORCED_SHOT_MIN_OPENNESS: f64 = 0.50;
-const SPECULATIVE_LONG_SHOT_MAX_YARDS: f64 = 45.0;
+// HARD shot-distance cap: no shot is taken from beyond this (was 45 — far too speculative). This
+// is the absolute ceiling for every shot path (the forward window derives from it, the midfielder
+// window is this − 5), so a shot from >30yd never qualifies. Shots in the 20–30yd band are allowed
+// but reward-penalised (see `shot_reward_points`); inside 20yd they are rewarded, rising as they
+// get closer.
+const SPECULATIVE_LONG_SHOT_MAX_YARDS: f64 = 30.0;
 const SPECULATIVE_LONG_SHOT_MAX_BLOCK_PROBABILITY: f64 = 0.46;
 const SPECULATIVE_LONG_SHOT_MIN_ON_FRAME_PROBABILITY: f64 = 0.10;
 const SPECULATIVE_LONG_SHOT_SKILL_GATE: f64 = 0.68;
