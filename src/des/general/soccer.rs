@@ -1177,18 +1177,17 @@ const PASS_DIRECT_OPPONENT_AIM_SCORE_PENALTY: f64 = 12.0;
 const PASS_DIRECT_OPPONENT_AIM_HARD_VETO_PENALTY: f64 = 1000.0;
 // "Reception conceded to an opponent" hard veto. The aim-point veto above only fires when
 // an opponent is strictly CLOSER to the aim than the intended receiver, so it misses two
-// real giveaways: (a) the ball played to a teammate who is MAN-MARKED — a defender level
-// with / shadowing him who steps in front the instant it arrives — and (b) a ball played
-// near an opponent's feet where the receiver happens to be marginally closer. Both are
-// turnovers. The veto fires when the nearest opponent to the reception point is within
-// this contest radius, is level-with-or-in-front of the receiver (toward the ball) by the
-// front margin, AND can physically REACH the arriving ball (reusing the lane-arrival +
-// sprint-reach model, so a slow/distant marker or a ball zipped past does not trip it). A
-// defender glued to the ball (`AT_FEET`) is always a concession; a looser marker only
-// when the passer is genuinely pressured, which preserves brave passes to a half-open
-// receiver and contested final-third receptions to an OPEN man.
-const PASS_RECEPTION_CONCEDE_CONTEST_RADIUS_YARDS: f64 = 3.0;
-const PASS_RECEPTION_CONCEDE_FRONT_MARGIN_YARDS: f64 = 0.75;
+// real giveaways: (a) the ball played near an opponent's FEET (the receiver is marginally
+// closer, so the aim-point test stays silent), and (b) the ball played to a teammate who
+// is tightly MAN-MARKED — the marker doesn't beat the receiver to the ball, he dispossesses
+// the instant it arrives. Both are turnovers. A defender within `AT_FEET` of the reception
+// point that can physically REACH the arriving ball is always a concession (case a); a
+// marker within `MARK_RADIUS` is a concession only when the passer is genuinely pressured
+// (case b) — which leaves a brave pass to a half-open man, and a contested final-third
+// reception to an OPEN receiver, to the soft congestion penalty rather than hard-vetoing
+// them. The reach check (lane-arrival + sprint reach) keeps a slow/distant marker, or a
+// ball driven past too fast to be cut out, from tripping it.
+const PASS_RECEPTION_CONCEDE_MARK_RADIUS_YARDS: f64 = 2.25;
 const PASS_RECEPTION_CONCEDE_AT_FEET_RADIUS_YARDS: f64 = 1.25;
 
 fn direct_opponent_aim_score_penalty(risk: f64) -> f64 {
