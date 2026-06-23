@@ -8781,13 +8781,35 @@ impl SoccerMatch {
                                 && player.team == player_team
                         })
                     });
+                    // MPC determines the keeper's play-out: when the keeper is choosing freely
+                    // (no explicit target named), MPC picks which team-mate and which technique
+                    // (a ground roll vs a lofted throw/punt) the receding-horizon rendezvous can
+                    // best DELIVER, in place of the generic ranked target. An explicitly named
+                    // target (a learned plan / human input) is still honoured, and a restart he
+                    // is taking keeps its own goal-kick rules. The execution-layer MPC then sets
+                    // the launch pace below, so the whole play-out is MPC-driven.
+                    let keeper_mpc_distribution = if self.players[player_id].role
+                        == PlayerRole::Goalkeeper
+                        && self.restart_double_touch_guard != Some(player_id)
+                        && explicit_target_id.is_none()
+                    {
+                        snapshot.goalkeeper_mpc_distribution_for(player_id)
+                    } else {
+                        None
+                    };
                     let mut target_id = explicit_target_id.or_else(|| {
-                        if flight.is_aerial() {
-                            snapshot.best_aerial_pass_target(player_id)
-                        } else {
-                            snapshot.best_pass_target(player_id)
-                        }
+                        keeper_mpc_distribution.map(|(id, _)| id).or_else(|| {
+                            if flight.is_aerial() {
+                                snapshot.best_aerial_pass_target(player_id)
+                            } else {
+                                snapshot.best_pass_target(player_id)
+                            }
+                        })
                     });
+                    let mut flight = flight;
+                    if let Some((_, mpc_flight)) = keeper_mpc_distribution {
+                        flight = mpc_flight;
+                    }
                     // Resolve the aim point. With no ranked receiver, fall back to a purposeful
                     // forward outlet — and if that outlet is aimed at a genuinely open advanced
                     // teammate, ADOPT them as the receiver so the ball is played TO someone. Only
@@ -9020,6 +9042,52 @@ impl SoccerMatch {
                             blended.clamp(modulated_speed * 0.85, modulated_speed * 1.25)
                         }
                         None => modulated_speed,
+                    };
+                    // Learnable pass velocity (execution side): honor the speed the decision
+                    // priced. The value trade-off (receipt-aware) elects a power bucket; when
+                    // it chose to DRIVE the ball (above the 0.68 nominal) the lane was
+                    // contested and a firmer pass beats the defender to the corridor, so firm
+                    // the struck ball UP to that chosen pace. When it kept a weighted ball (an
+                    // open lane) the executed speed is left untouched — an uncontested pass is
+                    // never firmed or slowed. Firming to the CHOSEN speed (not the raw
+                    // `min_clearing` floor) keeps a contested ball receivable: the chosen speed
+                    // already balances threading the lane against the receiver controlling it,
+                    // so it can't over-drive into an uncontrollable rocket. Ground only;
+                    // aerials keep their gravity-fixed calibration. Disabled ⇒ unchanged.
+                    let speed = if !flight.is_aerial()
+                        && !dd_soccer_disable_learnable_pass_velocity()
+                    {
+                        if let Some(passer_snap) =
+                            snapshot.players.iter().find(|p| p.id == player_id)
+                        {
+                            let receiver = target_id.and_then(|id| {
+                                snapshot
+                                    .players
+                                    .iter()
+                                    .find(|p| p.id == id)
+                                    .map(|p| (p, p.position))
+                            });
+                            let plan = pass_velocity_plan_for_snapshot(
+                                &snapshot,
+                                passer_snap,
+                                player_pos,
+                                led_target,
+                                flight,
+                                is_cross,
+                                receiver,
+                            );
+                            if plan.power > 0.68 {
+                                speed.max(plan.speed_yps).min(mph_to_yps(
+                                    GROUND_PASS_CEILING_MPH + PASS_SPEED_CEILING_OVERSHOOT_MPH,
+                                ))
+                            } else {
+                                speed
+                            }
+                        } else {
+                            speed
+                        }
+                    } else {
+                        speed
                     };
                     let distance = player_pos.distance(led_target);
                     let mut aimed_target = noisy_pass_target_with_receiver_openness(
@@ -9256,18 +9324,6 @@ impl SoccerMatch {
                             goal_center_x - half_goal * 0.74
                         };
                         keeper_opposite_corner * 0.68 + far_post * 0.32
-                    } else if dd_soccer_enable_scored_shot_placement() {
-                        // Price the placement: aim a non-curl shot at the goal-mouth spot
-                        // the keeper can least reach, instead of dead-centre into them.
-                        let shot_speed =
-                            shot_speed_yps_from_power(power, &self.players[player_id].skills);
-                        snapshot.scored_shot_placement_x(
-                            player_team,
-                            player_pos,
-                            goal_y,
-                            shot_speed,
-                            ability01(self.players[player_id].skills.shooting),
-                        )
                     } else {
                         goal_center_x
                     };
@@ -15824,24 +15880,6 @@ fn dd_soccer_disable_one_two_give_to_feet() -> bool {
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("DD_SOCCER_DISABLE_ONE_TWO_GIVE_TO_FEET").is_ok())
 }
-
-/// How many goal-mouth placements [`WorldSnapshot::scored_shot_placement_x`] sweeps
-/// (the schema doc's ~9 placement buckets: both posts, both half-spaces, centre).
-const SCORED_SHOT_PLACEMENT_BUCKETS: usize = 9;
-/// Smallest safety margin inside the post a scored shot aims for (an elite finisher).
-const SCORED_SHOT_POST_MARGIN_MIN_YARDS: f64 = 0.6;
-/// Extra inside-the-post margin added as shooting skill falls (a weak finisher tucks it
-/// further inside the frame rather than threading the post and missing wide).
-const SCORED_SHOT_POST_MARGIN_SKILL_YARDS: f64 = 1.6;
-
-/// See [`WorldSnapshot::scored_shot_placement_x`]: set `DD_SOCCER_ENABLE_SCORED_SHOT_PLACEMENT=1`
-/// to aim non-curl shots at the keeper's least-saveable goal-mouth placement instead of the
-/// goal centre. Default off ⇒ shots keep the centred aim (byte-identical baseline / A/B).
-fn dd_soccer_enable_scored_shot_placement() -> bool {
-    use std::sync::OnceLock;
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_SCORED_SHOT_PLACEMENT").is_ok())
-}
 fn dd_soccer_disable_wall_pass_reward() -> bool {
     use std::sync::OnceLock;
     static V: OnceLock<bool> = OnceLock::new();
@@ -17107,73 +17145,6 @@ impl WorldSnapshot {
             / (PASS_DIRECT_OPPONENT_AIM_HARD_VETO_MARGIN_YARDS * 2.0).max(1.0))
         .clamp(0.0, 1.0);
         (directness * control_fit * fast_bypass_relief).clamp(0.0, 1.0)
-    }
-
-    /// Score the shot **placement** as a discrete decision instead of defaulting to the
-    /// goal centre (where the keeper usually stands). Sweeps placement buckets across the
-    /// goal mouth — just inside each post — and returns the goal-line x the opposing keeper
-    /// is *least* able to save, reusing the same speed- and position-aware
-    /// [`goalkeeper_save_probability_from_traits`] the shot's own beat-keeper estimate
-    /// already trusts. A harder shot earns a more extreme corner (less keeper move-time),
-    /// and the post margin widens as shooting skill falls so a weak finisher tucks it
-    /// comfortably inside the frame rather than aiming at the post. This realises the
-    /// schema doc's shot-placement axis (§3.3) as a scored decision and aligns execution
-    /// with the open-corner aim the decision-time `shot_beat_goalkeeper_probability`
-    /// already credits. Gated by `DD_SOCCER_ENABLE_SCORED_SHOT_PLACEMENT` (default off ⇒
-    /// shots keep the centred aim, byte-identical baseline).
-    pub(crate) fn scored_shot_placement_x(
-        &self,
-        shooting_team: Team,
-        shooter_position: Vec2,
-        goal_y: f64,
-        shot_speed_yps: f64,
-        shooting_skill: f64,
-    ) -> f64 {
-        let goal_center_x = self.field_width * 0.5;
-        let half_width = self.goal_width * 0.5;
-        let skill = shooting_skill.clamp(0.0, 1.0);
-        // Keep the aim inside the post by a skill-scaled safety margin so a struck ball
-        // stays on frame: a 10/10 finisher threads it; a poor one tucks it well inside.
-        let post_margin = (SCORED_SHOT_POST_MARGIN_MIN_YARDS
-            + (1.0 - skill) * SCORED_SHOT_POST_MARGIN_SKILL_YARDS)
-            .clamp(
-                SCORED_SHOT_POST_MARGIN_MIN_YARDS,
-                half_width.max(SCORED_SHOT_POST_MARGIN_MIN_YARDS),
-            );
-        let inner = (half_width - post_margin).max(0.0);
-        if inner <= 1e-6 || !shot_speed_yps.is_finite() {
-            return goal_center_x;
-        }
-        let Some(keeper) = self
-            .goalkeeper_for(shooting_team.other())
-            .and_then(|id| self.players.iter().find(|p| p.id == id))
-        else {
-            return goal_center_x;
-        };
-        let keeper_position = self.player_position(keeper.id).unwrap_or(keeper.position);
-        let mut best_x = goal_center_x;
-        let mut best_save = f64::INFINITY;
-        for bucket in 0..SCORED_SHOT_PLACEMENT_BUCKETS {
-            let t = bucket as f64 / (SCORED_SHOT_PLACEMENT_BUCKETS - 1) as f64;
-            let x = goal_center_x - inner + 2.0 * inner * t;
-            let crossing = Vec2::new(x, goal_y);
-            let save = goalkeeper_save_probability_from_traits(
-                &keeper.skills,
-                keeper_position,
-                keeper.velocity,
-                keeper.fatigue,
-                shooter_position,
-                crossing,
-                shot_speed_yps,
-                self.goal_width,
-                0.0,
-            );
-            if save < best_save - 1e-9 {
-                best_save = save;
-                best_x = x;
-            }
-        }
-        best_x
     }
 
     pub(crate) fn no_target_pass_point_directly_favors_opponent(
@@ -21230,13 +21201,51 @@ impl WorldSnapshot {
                         // (threaded/killer balls still consider it, with the risk priced in).
                         // A defender merely ABLE to lunge in stays visible-but-penalised below
                         // (the `anticipation_penalty`); this gate is the committed-cut-out case.
+                        // Learnable velocity (item 5): a committed cut-out of a WEIGHTED ball
+                        // may be beaten by a DRIVEN one, so re-evaluate this HARD hide at the
+                        // pace that actually threads the lane (`min_clearing_speed`) rather
+                        // than the fixed 0.68-power nominal. A lane a driven ball can split is
+                        // then kept visible and PRICED (the `anticipation_penalty` /
+                        // dynamic-risk score penalty), not hidden — only a defender's body
+                        // literally in the corridor still removes the option. Only evaluated
+                        // when this candidate set hides on cut-out (`require_reception_won`);
+                        // the threaded/killer set already prices it, so the sweep is skipped
+                        // there. The receiver is irrelevant to the threading pace, so it's
+                        // omitted to skip the MPC receipt cost. Disabled ⇒ nominal, unchanged.
+                        // Learnable velocity (item 5), reconciled with upstream's convergent
+                        // speed-aware veto model: BOTH hard hides that a driven ball can beat —
+                        // a committed (moving) cut-out and an unavoidable SET interceptor — are
+                        // evaluated at ONE threading pace (`min_clearing_speed`), not one at the
+                        // threading speed and the other at the 0.68 nominal. Upstream's
+                        // `pass_lane_control_is_unavoidable` already relaxes both with ball
+                        // speed (reach/timing + the fast-bypass), so feeding the threading pace
+                        // is what makes "a fast ball gets through" actually fire on the decision
+                        // side instead of only at execution. The receiver is irrelevant to the
+                        // threading pace, so it is omitted to skip the MPC receipt cost; the
+                        // plan's open-lane early-out keeps the common case to one risk probe.
+                        // Disabled ⇒ nominal speed for both, i.e. upstream behavior unchanged.
+                        let threading_speed = if dd_soccer_disable_learnable_pass_velocity() {
+                            nominal_speed
+                        } else {
+                            pass_velocity_plan_for_snapshot(
+                                self,
+                                me,
+                                me_position,
+                                *aim_point,
+                                PassFlight::Floor,
+                                initial_is_cross,
+                                None,
+                            )
+                            .min_clearing_speed_yps
+                            .max(nominal_speed)
+                        };
                         let committed_cutout = require_reception_won
                             && self.pass_lane_committed_cutout(
                                 me_position,
                                 *aim_point,
                                 me.team.other(),
                                 2.5,
-                                nominal_speed,
+                                threading_speed,
                             );
                         // `race_won` already includes the qualified half-open forward exception:
                         // skilled passers keep those options visible. Direct-opponent endpoints
@@ -21249,7 +21258,7 @@ impl WorldSnapshot {
                                 me_position,
                                 *aim_point,
                                 me.team,
-                                nominal_speed,
+                                threading_speed,
                             )
                             && self.pending_offside_for_pass(me.id, p.id).is_none()
                             && !self.final_third_forward_pass_to_nobody(
@@ -23645,18 +23654,37 @@ impl WorldSnapshot {
         default
     }
 
-    /// Whether the keeper should leave its box to claim a loose ball at `target`: only
-    /// when near-certain to win it — clearly first ahead of any opponent (arriving in well
-    /// under the nearest opponent's time) AND beating its own nearest teammate to it by
-    /// more than 0.5s. Inside its own penalty area it always claims.
-    pub(crate) fn goalkeeper_should_commit_to_loose_ball(
-        &self,
-        keeper_id: usize,
-        target: Vec2,
-    ) -> bool {
+    /// True if `p` is inside this team's own 6-yard box (goal area): within
+    /// [`SIX_YARD_BOX_DEPTH_YARDS`] of the goal line and within a post + 6yd half-width.
+    pub(crate) fn point_in_own_goal_area(&self, team: Team, p: Vec2) -> bool {
+        let central = (p.x - self.field_width * 0.5).abs()
+            <= self.goal_width * 0.5 + SIX_YARD_BOX_POST_EXTENSION_YARDS;
+        let goal_y = self.own_goal_y_for(team);
+        let depth = (p.y - goal_y) * team.attack_dir();
+        central && (-0.5..=SIX_YARD_BOX_DEPTH_YARDS).contains(&depth)
+    }
+
+    /// Whether the keeper is permitted to LEAVE its 6-yard box to move to `target`. Strong
+    /// box affinity: it only ventures out when (a) the ball has already entered its own
+    /// penalty area (18-yard box) AND (b) BOTH a POMDP race-margin estimate
+    /// ([`keeper_first_to_ball_probability`]) and an MPC bounded-acceleration reachability
+    /// estimate ([`keeper_mpc_reach_probability`]) put it ≥ [`GK_LEAVE_BOX_MIN_WIN_PROBABILITY`]
+    /// likely to reach `target` before the EARLIEST of (the nearest attacker, its own nearest
+    /// teammate) — so it never charges out into a 50/50 or across a covering defender. A target
+    /// already inside the 6-yard box, or a non-keeper, is always allowed.
+    pub(crate) fn goalkeeper_may_leave_six_yard_box(&self, keeper_id: usize, target: Vec2) -> bool {
         let Some(gk) = self.players.iter().find(|p| p.id == keeper_id) else {
             return false;
         };
+        if gk.role != PlayerRole::Goalkeeper || self.point_in_own_goal_area(gk.team, target) {
+            return true;
+        }
+        // (a) The ball (this is the loose-ball point the keeper would race to) must be inside
+        // our own penalty area — the keeper never ventures out of its box for a ball that has
+        // not even entered the 18-yard box.
+        if !self.point_in_own_penalty_area(gk.team, target) {
+            return false;
+        }
         let sprint_time = |p: &PlayerSnapshot| {
             let speed = (player_top_speed_yps(p.role, &p.skills)
                 * fatigue_speed_factor(p.skills.stamina, p.fatigue)
@@ -23672,35 +23700,182 @@ impl WorldSnapshot {
             .filter(|p| p.team == gk.team && p.id != keeper_id)
             .map(sprint_time)
             .fold(f64::INFINITY, f64::min);
-        if self.point_in_own_penalty_area(gk.team, target) {
-            let keeper_can_handle = self
-                .ball
-                .last_touch_team
-                .map_or(true, |last| last != gk.team);
-            if !keeper_can_handle {
-                return gk_time <= opponent_time * 0.65 && gk_time + 0.5 <= teammate_time;
-            }
-            // In his own box the keeper may come for an opponent-touched loose ball
-            // and use his hands, BUT must NOT charge through a covering teammate who
-            // is the clear favourite to win it — rushing out when a defender is ~99%
-            // going to reach it first caused collisions / own-goals and was a real
-            // flaw. Defer ONLY to a teammate who reaches it clearly before BOTH the
-            // keeper and any opponent (a safe, uncontested win); in a contested 50/50
-            // the keeper still commits.
-            // Genome `gk_commit_aggression` scales how readily he commits: an
-            // aggressive keeper needs the teammate to beat it by a larger margin
-            // before backing off (commits more); a passive keeper defers sooner.
-            // Neutral (0.5) keeps the base margins.
-            let margin_scale = 0.5 + self.genome_for(gk.team).gk_commit_aggression;
-            let defer_margin = GK_BOX_DEFER_TO_TEAMMATE_MARGIN_SECONDS * margin_scale;
-            let over_opp_margin = GK_BOX_TEAMMATE_OVER_OPPONENT_MARGIN_SECONDS * margin_scale;
-            let teammate_clearly_wins = teammate_time + defer_margin < gk_time
-                && teammate_time + over_opp_margin < opponent_time;
-            return !teammate_clearly_wins;
+        // Beating the EARLIER rival implies beating both ("before an attacker AND before his
+        // own teammate"), so the earliest arrival is the single binding budget.
+        let earliest_rival = opponent_time.min(teammate_time);
+        if !earliest_rival.is_finite() {
+            return true;
         }
-        // Out of the box the keeper only sweeps with ~99% certainty: arrive in ≤65% of
-        // the opponent's time AND beat the nearest teammate to it by more than 0.5s.
-        gk_time <= opponent_time * 0.65 && gk_time + 0.5 <= teammate_time
+        // (b1) POMDP: analytic race-margin probability the keeper is clearly first (top-speed
+        // sprint times).
+        let pomdp_win = keeper_first_to_ball_probability(gk_time, earliest_rival);
+        // (b2) MPC: bounded-acceleration reachability — does the keeper, ramping from its
+        // current closing speed under its acceleration cap, physically get there within the
+        // earliest rival's window? Stricter than the POMDP estimate (it pays the accel ramp).
+        let gk_pos = self.player_snapshot_position(gk);
+        let gk_vel = self.player_velocity(gk.id).unwrap_or(gk.velocity);
+        let distance = gk_pos.distance(target);
+        let speed_toward = if distance > 1e-6 {
+            gk_vel.dot((target - gk_pos) * (1.0 / distance))
+        } else {
+            0.0
+        };
+        let top_speed = (player_top_speed_yps(gk.role, &gk.skills)
+            * fatigue_speed_factor(gk.skills.stamina, gk.fatigue)
+            * MovementGait::Sprint.speed_multiplier())
+        .max(0.5);
+        let accel_cap = acceleration_yps2_from_score(gk.skills.acceleration)
+            * fatigue_speed_factor(gk.skills.stamina, gk.fatigue);
+        let mpc_win =
+            keeper_mpc_reach_probability(distance, speed_toward, top_speed, accel_cap, earliest_rival);
+        pomdp_win >= GK_LEAVE_BOX_MIN_WIN_PROBABILITY && mpc_win >= GK_LEAVE_BOX_MIN_WIN_PROBABILITY
+    }
+
+    /// Whether the keeper should leave its box to claim a loose ball at `target`. The keeper
+    /// holds a strong affinity for its 6-yard box: a claim that stays inside the goal area
+    /// uses the existing safe-defer logic (come unless a teammate clearly wins), but a claim
+    /// that would take it OUT of the 6-yard box is allowed only under the strict
+    /// [`Self::goalkeeper_may_leave_six_yard_box`] gate (ball in the 18-yard box + dual
+    /// POMDP/MPC 95% race win over the earliest of attacker / teammate).
+    pub(crate) fn goalkeeper_should_commit_to_loose_ball(
+        &self,
+        keeper_id: usize,
+        target: Vec2,
+    ) -> bool {
+        let Some(gk) = self.players.iter().find(|p| p.id == keeper_id) else {
+            return false;
+        };
+        // A claim that would take the keeper OUT of its 6-yard box is allowed only under the
+        // strict leave-box gate: the ball must be in the 18-yard box and BOTH the POMDP and
+        // MPC estimates must put it ≥95% to beat the earliest of (attacker, teammate). This
+        // is the strong box affinity — no charging out into a 50/50 or across a covering man.
+        // Checked first so the in-box race below is only computed for an in-box claim.
+        if !self.point_in_own_goal_area(gk.team, target) {
+            return self.goalkeeper_may_leave_six_yard_box(keeper_id, target);
+        }
+        let sprint_time = |p: &PlayerSnapshot| {
+            let speed = (player_top_speed_yps(p.role, &p.skills)
+                * fatigue_speed_factor(p.skills.stamina, p.fatigue)
+                * MovementGait::Sprint.speed_multiplier())
+            .max(1.0);
+            self.player_snapshot_position(p).distance(target) / speed
+        };
+        let gk_time = sprint_time(gk);
+        let opponent_time = self.nearest_opponent_arrival_time_to(gk.team, target);
+        let teammate_time = self
+            .players
+            .iter()
+            .filter(|p| p.team == gk.team && p.id != keeper_id)
+            .map(sprint_time)
+            .fold(f64::INFINITY, f64::min);
+        // Inside the 6-yard box (⊂ the penalty area): the keeper claims with his hands, but
+        // must NOT charge through a covering teammate who is the clear favourite to win it —
+        // rushing in when a defender is ~99% going to reach it first caused collisions /
+        // own-goals. Defer ONLY to a teammate who reaches it clearly before BOTH the keeper
+        // and any opponent (a safe, uncontested win); in a contested 50/50 the keeper commits.
+        let keeper_can_handle = self
+            .ball
+            .last_touch_team
+            .map_or(true, |last| last != gk.team);
+        if !keeper_can_handle {
+            return gk_time <= opponent_time * 0.65 && gk_time + 0.5 <= teammate_time;
+        }
+        // Genome `gk_commit_aggression` scales how readily he commits: an aggressive keeper
+        // needs the teammate to beat it by a larger margin before backing off (commits more);
+        // a passive keeper defers sooner. Neutral (0.5) keeps the base margins.
+        let margin_scale = 0.5 + self.genome_for(gk.team).gk_commit_aggression;
+        let defer_margin = GK_BOX_DEFER_TO_TEAMMATE_MARGIN_SECONDS * margin_scale;
+        let over_opp_margin = GK_BOX_TEAMMATE_OVER_OPPONENT_MARGIN_SECONDS * margin_scale;
+        let teammate_clearly_wins = teammate_time + defer_margin < gk_time
+            && teammate_time + over_opp_margin < opponent_time;
+        !teammate_clearly_wins
+    }
+
+    /// MPC determines WHERE and HOW the keeper plays the ball out: among outfield team-mates
+    /// and the two delivery techniques (a ground roll vs a lofted throw/punt), pick the
+    /// (receiver, flight) the receding-horizon rendezvous can best DELIVER — the receiver wins
+    /// the meeting under bounded acceleration ahead of the nearest opponent (high MPC receipt),
+    /// the lane is physically open (a blocked ground lane is undeliverable; a loft may clear
+    /// it), and the receiver is unmarked — tie-broken toward the keeper's territorial flank
+    /// preference. Returns `None` when nothing is cleanly deliverable, so the caller falls back
+    /// to holding / clearing. The launch pace itself is then set by the execution-layer MPC
+    /// (`mpc_pass_execution`), so the whole play-out — receiver, technique and pace — is MPC.
+    pub(crate) fn goalkeeper_mpc_distribution_for(
+        &self,
+        keeper_id: usize,
+    ) -> Option<(usize, PassFlight)> {
+        let gk = self.players.iter().find(|p| p.id == keeper_id)?;
+        if gk.role != PlayerRole::Goalkeeper {
+            return None;
+        }
+        let gk_pos = self.player_snapshot_position(gk);
+        let keeper_pressure =
+            pressure_from_nearest_distance(self.nearest_opponent_distance_at(gk.team, gk_pos));
+        let mut best: Option<(f64, usize, PassFlight)> = None;
+        for receiver in self.players.iter().filter(|p| {
+            p.team == gk.team && p.id != keeper_id && p.role != PlayerRole::Goalkeeper
+        }) {
+            let target_pos = self.player_snapshot_position(receiver);
+            for &flight in &[PassFlight::Floor, PassFlight::Aerial] {
+                let is_cross = pass_would_be_cross(
+                    gk_pos,
+                    target_pos,
+                    gk.team,
+                    self.field_width,
+                    self.field_length,
+                );
+                let speed = pass_speed_yps_from_power(0.72, flight, is_cross, &gk.skills);
+                let aim = self
+                    .anticipated_pass_reception_point(keeper_id, receiver.id, flight, speed)
+                    .unwrap_or(target_pos);
+                // MPC rendezvous feasibility: can the receiver meet this delivery before the
+                // nearest opponent, under bounded acceleration?
+                let mpc = pass_mpc_receipt_estimate_for_snapshot(
+                    self, gk, gk_pos, receiver, target_pos, flight, speed, aim,
+                );
+                if mpc.probability < GK_MPC_DISTRIBUTION_MIN_RECEIPT {
+                    continue;
+                }
+                // A ground roll through a defender in the lane is not deliverable; a loft can
+                // clear that defender, so the lane gate only vetoes the ground technique.
+                let (lane_clear_now, _) =
+                    self.pass_lane_clearance(gk_pos, aim, gk.team.other(), 2.5, speed);
+                if !lane_clear_now && !flight.is_aerial() {
+                    continue;
+                }
+                let openness = pass_receiver_openness_for_snapshots_with_teammates(
+                    &self.players,
+                    gk.team,
+                    target_pos,
+                    Some(receiver.id),
+                );
+                let distribution_preference = goalkeeper_distribution_score(
+                    gk.team,
+                    gk_pos,
+                    aim,
+                    self.field_width,
+                    keeper_pressure,
+                );
+                // MPC deliverability dominates; receiver openness and the territorial flank
+                // preference only shade the choice among genuinely deliverable options. A clear
+                // ground lane gets a small technique nudge so the keeper rolls a controllable
+                // ball out when it can, and only lofts when the ground option is blocked.
+                let technique_preference = if matches!(flight, PassFlight::Floor) && lane_clear_now
+                {
+                    GK_MPC_DISTRIBUTION_GROUND_TECHNIQUE_PREF
+                } else {
+                    0.0
+                };
+                let score = mpc.probability * 3.0
+                    + openness * 1.2
+                    + distribution_preference * 0.12
+                    + technique_preference;
+                if best.as_ref().map_or(true, |(best_score, _, _)| score > *best_score) {
+                    best = Some((score, receiver.id, flight));
+                }
+            }
+        }
+        best.map(|(_, receiver_id, flight)| (receiver_id, flight))
     }
 
     fn nearest_opponent_arrival_time_to(&self, team: Team, target: Vec2) -> f64 {
