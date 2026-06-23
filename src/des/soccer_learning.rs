@@ -5473,6 +5473,39 @@ mod tests {
     }
 
     #[test]
+    fn learning_run_validator_bounds_mappo_team_reward_share() {
+        // Default (0.0) is the individual-reward objective and must validate.
+        let neural = SoccerNeuralLearningConfig {
+            enabled: true,
+            ..SoccerNeuralLearningConfig::default()
+        };
+        assert_eq!(neural.mappo_team_reward_share, 0.0);
+        validate_soccer_neural_learning_config_for_learning_run(&neural)
+            .expect("default mappo team-reward share should be valid");
+
+        // A fully shared team reward (1.0) is the cooperative-MARL extreme and is allowed.
+        let neural = SoccerNeuralLearningConfig {
+            enabled: true,
+            mappo_team_reward_share: 1.0,
+            ..SoccerNeuralLearningConfig::default()
+        };
+        validate_soccer_neural_learning_config_for_learning_run(&neural)
+            .expect("fully shared team reward should be valid");
+
+        // Out of [0, 1] must fail fast rather than silently clamp.
+        for bad in [-0.1, 1.5] {
+            let neural = SoccerNeuralLearningConfig {
+                enabled: true,
+                mappo_team_reward_share: bad,
+                ..SoccerNeuralLearningConfig::default()
+            };
+            let err = validate_soccer_neural_learning_config_for_learning_run(&neural)
+                .expect_err("out-of-range mappo team-reward share should fail fast");
+            assert!(err.contains("mappoTeamRewardShare"), "{err}");
+        }
+    }
+
+    #[test]
     fn learning_run_validator_rejects_q_policy_exploration_epsilon_drift() {
         let options = SoccerQPolicyOptions {
             exploration_epsilon: 1.25,
