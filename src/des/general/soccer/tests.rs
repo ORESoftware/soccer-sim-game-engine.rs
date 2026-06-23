@@ -66436,10 +66436,18 @@ fn away_clear_goal_approach_shot_probability_ramps_toward_home_goal() {
             })
             .sum::<f64>();
         if idx > 0 {
-            assert!(
+            if previous_shoot < 0.9 {
+                assert!(
                     shoot > previous_shoot + 0.05,
                     "away clear shot probability should ramp as home goal gets closer: y={y} shoot={shoot} previous={previous_shoot} options={options:?}"
                 );
+            } else {
+                // Inside the 30yd cap a clean shot saturates quickly; once high it must stay high.
+                assert!(
+                    shoot >= previous_shoot - 1e-6,
+                    "saturated away clear shot probability should stay high near goal: y={y} shoot={shoot} previous={previous_shoot} options={options:?}"
+                );
+            }
         }
         // Beyond ~30 yds the keeper saves ~95%, so shooting is (correctly) no
         // longer favored over driving/recycling — only assert it inside range.
