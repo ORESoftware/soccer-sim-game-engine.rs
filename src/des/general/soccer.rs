@@ -9527,11 +9527,20 @@ pub(crate) fn soccer_marl_adjusted_reward(
     if !config.marl_enabled() {
         return reward;
     }
-    let intermediate = reward * config.sanitized_marl_intermediate_reward_weight();
+    let tick_reward = tick_rewards.get(&transition.tick).copied();
+    // MAPPO cooperative-credit SHARE (ours): blend the agent's individual reward toward its team's
+    // per-tick mean BEFORE the centralized weighting, so off-ball work that sets up a teammate's
+    // later goal is credited. `share = 0` (the default) leaves the reward fully individual, so the
+    // `intermediate` line below reduces to the prior `reward * intermediate_weight` byte-for-byte.
+    let own_avg = tick_reward.map_or(0.0, |tr| tr.average_for(transition.team));
+    let share = config.sanitized_mappo_team_reward_share();
+    let shared = (1.0 - share) * reward + share * own_avg;
+    let intermediate = shared * config.sanitized_marl_intermediate_reward_weight();
     if config.marl_algorithm != SoccerMarlAlgorithm::Mappo {
         return intermediate;
     }
-    let Some(tick_reward) = tick_rewards.get(&transition.tick).copied() else {
+    // Centralized zero-sum team component (theirs): own team's tick mean minus the opponent's.
+    let Some(tick_reward) = tick_reward else {
         return intermediate;
     };
     let team_component =
