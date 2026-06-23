@@ -426,6 +426,13 @@ impl SoccerActionLabel {
             | "shielded-turn"
             | "shielded_turn"
             | "turn-and-shield" => "xavi-turn",
+            "open_passing_lane"
+            | "open-lane"
+            | "open_lane"
+            | "open-passing-lane-dribble"
+            | "create-passing-lane"
+            | "create-passing-angle"
+            | "dribble-open-lane" => "open-passing-lane",
             "fake_left_cut_right" | "fake-left-right" | "fake-left-cut-right-dribble" => {
                 "fake-left-cut-right"
             }
