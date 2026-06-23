@@ -43066,8 +43066,6 @@ fn xavi_turn_enabled(config: &MatchConfig) -> bool {
     !dd_soccer_disable_xavi_turn() && !config.disable_xavi_turn
 }
 
-<<<<<<< HEAD
-=======
 fn dd_soccer_enable_obstacle_aware_intercept() -> bool {
     use std::sync::OnceLock;
     static V: OnceLock<bool> = OnceLock::new();
@@ -43083,7 +43081,6 @@ fn obstacle_aware_intercept_enabled(config: &MatchConfig) -> bool {
     dd_soccer_enable_obstacle_aware_intercept() || config.enable_obstacle_aware_intercept
 }
 
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
 /// The clean-steal ceiling for a carrier executing a body-shielding dribble move: a
 /// standing `protect-ball` shield caps the steal at [`SHIELDED_HOLDER_TACKLE_SUCCESS_CAP`],
 /// and a `xavi-turn` (ball kept on the far side through the whole wheel) at the tighter
