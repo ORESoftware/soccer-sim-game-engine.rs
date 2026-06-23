@@ -27567,12 +27567,12 @@ fn elite_shot_speed_reaches_seventy_near_the_cap() {
 }
 
 #[test]
-fn shot_launch_speed_stays_within_forty_to_sixty_mph_band() {
-    // A shot on goal must leave the boot at 40-60 mph: even a zero-power placed
-    // effort clears the 40 mph floor, and a full-power elite strike is capped at
-    // 60. Sweep the whole power x technique space; every launch stays in band.
-    let floor = mph_to_yps(40.0);
-    let cap = mph_to_yps(60.0);
+fn shot_launch_speed_stays_within_fifty_to_seventytwo_mph_band() {
+    // A shot on goal must leave the boot at 50-72 mph (clearly above the pass band so it reads as
+    // a strike): even a zero-power placed effort clears the 50 mph floor, and a full-power elite
+    // strike tops out near 70, under the 72 mph cap. Sweep the whole power x technique space.
+    let floor = mph_to_yps(50.0);
+    let cap = mph_to_yps(72.0);
     let weak = SkillProfile {
         shooting: 0.0,
         right_foot_shot_power: 0.0,
