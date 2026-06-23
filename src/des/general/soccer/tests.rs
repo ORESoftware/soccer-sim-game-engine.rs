@@ -65587,7 +65587,8 @@ fn near_goal_shot_and_killer_pass_pressure_both_ramp_over_recycling() {
 
     let mut previous_decisive = 0.0;
     let mut previous_thread_pressure = 0.0;
-    for (idx, y) in [82.0, 88.0, 94.0].into_iter().enumerate() {
+    // Positions within the 30yd shot cap (yards_to_goal = 120 - y => 26, 20, 14), ramping in.
+    for (idx, y) in [94.0, 100.0, 106.0].into_iter().enumerate() {
         sim.players[attacker].position = Vec2::new(39.0, y);
         sim.players[attacker].velocity = Vec2::new(0.2, 4.0);
         sim.players[runner].position = Vec2::new(47.0, (y + 12.0).min(108.0));
