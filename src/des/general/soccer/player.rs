@@ -781,6 +781,7 @@ fn mpc_reselect_candidate_label(label: &str) -> bool {
             | "right-cut"
             | "nutmeg"
             | "xavi-turn"
+            | "open-passing-lane"
             | "fake-left-cut-right"
             | "fake-right-cut-left"
             | "protect-ball"
