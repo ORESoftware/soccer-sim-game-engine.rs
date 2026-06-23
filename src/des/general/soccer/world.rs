@@ -3364,7 +3364,7 @@ impl SoccerMatch {
             let state_features = soccer_neural_transition_features(&base);
             self.policy_head
                 .as_ref()
-                .and_then(|head| head.action_distribution(&state_features))
+                .and_then(|head| head.action_distribution_for_role(&state_features, role))
                 .map(|dist| dist.iter().map(|&p| p.max(1e-8).ln()).collect())
         } else {
             None
