@@ -27646,8 +27646,8 @@ fn struck_shot_releases_the_ball_in_the_fifty_to_seventytwo_band() {
     assert!(sim.ball.holder.is_none(), "the strike must release the ball");
     let launch = sim.ball.velocity.len();
     assert!(
-        launch >= mph_to_yps(40.0) - 1e-6 && launch <= mph_to_yps(60.0) + 1e-6,
-        "a planted strike must leave the boot at 40-60 mph (got {launch} yps)"
+        launch >= mph_to_yps(50.0) - 1e-6 && launch <= mph_to_yps(72.0) + 1e-6,
+        "a planted strike must leave the boot at 50-72 mph (got {launch} yps)"
     );
 }
 
