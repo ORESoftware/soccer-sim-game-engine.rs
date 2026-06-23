@@ -12999,18 +12999,11 @@ impl Default for SoccerNeuralLearningConfig {
             snapshot_every_batches: DEFAULT_SOCCER_NEURAL_SNAPSHOT_EVERY_BATCHES,
             lp_coupling_enabled: false,
             critic_baseline_weight: 0.0,
-<<<<<<< HEAD
             mappo_team_reward_share: 0.0,
-=======
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
             marl_algorithm: SoccerMarlAlgorithm::Mappo,
             marl_team_reward_weight: DEFAULT_SOCCER_MARL_TEAM_REWARD_WEIGHT,
             marl_intermediate_reward_weight: DEFAULT_SOCCER_MARL_INTERMEDIATE_REWARD_WEIGHT,
             mappo_clip_epsilon: DEFAULT_SOCCER_MAPPO_CLIP_EPSILON,
-<<<<<<< HEAD
-=======
-            mappo_team_reward_share: 0.0,
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
         }
     }
 }
