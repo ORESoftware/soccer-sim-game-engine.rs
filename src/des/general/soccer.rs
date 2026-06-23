@@ -1175,6 +1175,21 @@ const PASS_DIRECT_OPPONENT_AIM_SCORE_PENALTY: f64 = 12.0;
 // intended receiver (`pass_point_directly_favors_opponent`), it is a direct giveaway — sink the
 // candidate by this much so it can never outrank holding or a safe outlet.
 const PASS_DIRECT_OPPONENT_AIM_HARD_VETO_PENALTY: f64 = 1000.0;
+// "Reception conceded to an opponent" hard veto. The aim-point veto above only fires when
+// an opponent is strictly CLOSER to the aim than the intended receiver, so it misses two
+// real giveaways: (a) the ball played to a teammate who is MAN-MARKED — a defender level
+// with / shadowing him who steps in front the instant it arrives — and (b) a ball played
+// near an opponent's feet where the receiver happens to be marginally closer. Both are
+// turnovers. The veto fires when the nearest opponent to the reception point is within
+// this contest radius, is level-with-or-in-front of the receiver (toward the ball) by the
+// front margin, AND can physically REACH the arriving ball (reusing the lane-arrival +
+// sprint-reach model, so a slow/distant marker or a ball zipped past does not trip it). A
+// defender glued to the ball (`AT_FEET`) is always a concession; a looser marker only
+// when the passer is genuinely pressured, which preserves brave passes to a half-open
+// receiver and contested final-third receptions to an OPEN man.
+const PASS_RECEPTION_CONCEDE_CONTEST_RADIUS_YARDS: f64 = 3.0;
+const PASS_RECEPTION_CONCEDE_FRONT_MARGIN_YARDS: f64 = 0.75;
+const PASS_RECEPTION_CONCEDE_AT_FEET_RADIUS_YARDS: f64 = 1.25;
 
 fn direct_opponent_aim_score_penalty(risk: f64) -> f64 {
     let risk = risk.clamp(0.0, 1.0);
