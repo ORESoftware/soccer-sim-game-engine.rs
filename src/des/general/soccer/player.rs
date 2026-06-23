@@ -6848,6 +6848,35 @@ impl PlayerAgent {
                             break;
                         }
                     }
+                    "open-passing-lane" => {
+                        order_names.push("open-passing-lane".to_string());
+                        let open_lane_chance =
+                            action_option_score(&action_options, "open-passing-lane");
+                        if let Some((spot, _receiver, sprint_flag)) = open_lane_dribble {
+                            if agentic_action_commitment(
+                                open_lane_chance,
+                                snapshot.dt_seconds,
+                                &observation,
+                                self.role,
+                            ) {
+                                // A controlled carry to the spot, executed through the per-player
+                                // MPC like any dribble; sprint per the maneuver's own decision.
+                                let kind = DribbleMoveKind::CarryForward;
+                                let touch = snapshot
+                                    .deterministic_dribble_touch_decision_for(self.id, kind);
+                                open_lane_sprint = Some(sprint_flag);
+                                chosen = Some((
+                                    SoccerAction::DribbleMove {
+                                        target: spot,
+                                        kind,
+                                        touch,
+                                    },
+                                    "open-passing-lane".to_string(),
+                                ));
+                                break;
+                            }
+                        }
+                    }
                     "side-step" => {
                         order_names.push("side-step".to_string());
                         let side_step_chance = action_option_score(&action_options, "side-step");
