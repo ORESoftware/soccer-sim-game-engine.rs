@@ -27613,10 +27613,10 @@ fn shot_launch_speed_stays_within_fifty_to_seventytwo_mph_band() {
 }
 
 #[test]
-fn struck_shot_releases_the_ball_in_the_forty_to_sixty_band() {
+fn struck_shot_releases_the_ball_in_the_fifty_to_seventytwo_band() {
     // End-to-end guard on the launch path (`apply_player_intent` -> Shoot): a
     // planted shooter (no body momentum, so the kick-power factor is a full 1.0)
-    // must send the ball away at the 40-60 mph shot pace, not a slow roll.
+    // must send the ball away at the 50-72 mph shot pace, not a slow roll.
     let mut sim = SoccerMatch::default_11v11(MatchConfig {
         duration_seconds: 0.1,
         seed: 7_788,
