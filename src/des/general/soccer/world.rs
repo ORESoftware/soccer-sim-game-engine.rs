@@ -23378,13 +23378,14 @@ impl WorldSnapshot {
                 );
                 let direct_opponent_aim_penalty =
                     direct_opponent_aim_score_penalty(direct_opponent_control_risk);
-                // HARD veto (the real fix for "passing straight to the opposition"): if the aim
-                // point is clearly closer to an opponent than to the intended receiver, sink the
-<<<<<<< HEAD
-                // candidate so it never wins over holding or a safe outlet. The second clause
-                // closes the man-marked-receiver / ball-to-the-feet hole the aim-point test
+                // candidate so it never wins over holding or a safe outlet. Both teams independently
+                // fixed the man-marked-receiver / ball-to-the-feet hole the bare aim-point test
                 // misses (an opponent level-with-or-in-front of a receiver who is himself at the
-                // aim point), so a pressured holder can't feed a tightly-marked teammate.
+                // aim point); the two fixes are complementary and BOTH apply, sharing one passer
+                // pressure read. Ours is a HARD veto (`pass_reception_conceded_to_opponent`) that
+                // sinks a clear concession — a marker glued to the ball, or a pressured ball into a
+                // tightly-marked man — and theirs is a graded SOFT `marked_receiver_penalty` that
+                // additionally demotes a marginally-marked receiver below the hard-veto bar.
                 let passer_pressure_for_veto =
                     self.attacker_pressure_on_point(me.team, me_position);
                 let direct_opponent_aim_veto = if self
@@ -23401,21 +23402,12 @@ impl WorldSnapshot {
                 } else {
                     0.0
                 };
-=======
-                // candidate so it never wins over holding or a safe outlet.
-                let direct_opponent_aim_veto =
-                    if self.pass_point_directly_favors_opponent(me.team, position, pass_point) {
-                        PASS_DIRECT_OPPONENT_AIM_HARD_VETO_PENALTY
-                    } else {
-                        0.0
-                    };
                 let marked_receiver_penalty = self.pass_target_marking_score_penalty(
                     me.team,
                     position,
                     pass_point,
-                    passer_pressure,
+                    passer_pressure_for_veto,
                 );
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
                 // Pointless short ball: under low pressure, a sub-4yd pass to a teammate who
                 // is no more open than the holder neither escapes pressure nor progresses —
                 // demote it. Allowed when the receiver is clearly less pressured (an escape).
