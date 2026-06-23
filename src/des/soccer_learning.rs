@@ -899,22 +899,15 @@ pub fn validate_soccer_neural_learning_config_for_learning_run(
         ("targetScale", config.target_scale),
         ("targetClip", config.target_clip),
         ("criticBaselineWeight", config.critic_baseline_weight),
-<<<<<<< HEAD
-        // Both convergent multi-agent-RL knobs are kept: MAPPO team-reward SHARE (ours) and the
+        // All convergent multi-agent-RL knobs are validated: MAPPO team-reward SHARE (ours) and the
         // MARL team/intermediate reward weights + the MAPPO clip epsilon (theirs).
         ("mappoTeamRewardShare", config.mappo_team_reward_share),
-=======
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
         ("marlTeamRewardWeight", config.marl_team_reward_weight),
         (
             "marlIntermediateRewardWeight",
             config.marl_intermediate_reward_weight,
         ),
         ("mappoClipEpsilon", config.mappo_clip_epsilon),
-<<<<<<< HEAD
-=======
-        ("mappoTeamRewardShare", config.mappo_team_reward_share),
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
     ] {
         if !value.is_finite() {
             return Err(format!("{name} must be finite"));
