@@ -1489,16 +1489,17 @@ fn pass_concede_decision_respects_passer_perception() {
     // A marker ~1.8yd off the reception: within the mark radius, not at the feet.
     place_marker_on_reception(&mut sim, passer, receiver, marker, Vec2::new(1.8, 0.0));
 
-    // Facing the reception: the passer perceives the marker -> conceded.
-    sim.players[passer].facing_yaw = std::f64::consts::FRAC_PI_2;
+    // Facing the reception (toward +y): the passer perceives the marker -> conceded. (The holder
+    // facing comes from `action_facing`; FacingBucket::South is the +y unit vector here.)
+    sim.players[passer].action_facing = FacingBucket::South;
     let snapshot = WorldSnapshot::from_match(&sim);
     assert!(
         snapshot.pass_target_concedes_to_perceived_opponent(passer, receiver, PassFlight::Floor),
         "a marked man the passer is looking straight at is a perceived concession"
     );
 
-    // Facing away: the marker is on the passer's blindside -> a realistic loss, not a veto.
-    sim.players[passer].facing_yaw = -std::f64::consts::FRAC_PI_2;
+    // Facing away (toward -y): the marker is on the passer's blindside -> a realistic loss.
+    sim.players[passer].action_facing = FacingBucket::North;
     let snapshot = WorldSnapshot::from_match(&sim);
     assert!(
         !snapshot.pass_target_concedes_to_perceived_opponent(passer, receiver, PassFlight::Floor),
