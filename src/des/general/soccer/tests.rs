@@ -4651,7 +4651,7 @@ fn near_goal_decisive_pressure_prefers_shot_or_killer_pass_over_recycling() {
         Some(receiver)
     );
     let mut observation = snapshot.observation_for(passer);
-    observation.yards_to_goal = 34.0;
+    observation.yards_to_goal = 24.0;
     observation.shot_lane_open = true;
     observation.shot_block_probability = 0.20;
     observation.shot_on_frame_probability = 0.64;
