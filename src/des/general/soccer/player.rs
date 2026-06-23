@@ -6399,6 +6399,55 @@ impl PlayerAgent {
             // right on top with the forward path blocked — and only when live
             // (`xavi_turn_enabled`). Added conditionally so the option set is byte-identical
             // to baseline outside this window, which keeps a disabled match in lock-step.
+            // DRIBBLE TO OPEN A PASSING LANE: the ideal receiver's direct lane is blocked, so a
+            // short (1-8yd) quick carry to one side shifts the angle off the blocker and opens the
+            // pass. Computed once; offered as its own option and executed as an MPC-driven carry to
+            // the spot. Returns the spot, the receiver it opens, and whether to sprint (very high
+            // pressure / a fast-tracking opponent) vs run.
+            let open_lane_dribble = if self.role != PlayerRole::Goalkeeper {
+                snapshot.dribble_to_open_passing_lane_for(self.id)
+            } else {
+                None
+            };
+            let mut open_lane_offered = false;
+            if let Some((_spot, receiver_id, _sprint)) = open_lane_dribble {
+                let press = observation
+                    .perceived_pressure
+                    .max(observation.pressure_urgency)
+                    .clamp(0.0, 1.0);
+                // MDP/POMDP value: worth more when it opens a PROGRESSIVE (upfield) pass, and
+                // lifted by pressure (the more boxed in, the more the angle is worth making).
+                let upfield = snapshot
+                    .players
+                    .iter()
+                    .find(|p| p.id == receiver_id)
+                    .map(|r| {
+                        ((snapshot.player_snapshot_position(r).y - self.position.y)
+                            * self.team.attack_dir()
+                            / 20.0)
+                            .clamp(0.0, 1.0)
+                    })
+                    .unwrap_or(0.0);
+                let appetite = (OPEN_LANE_DRIBBLE_BASE_APPETITE
+                    * self.preferences.dribble_bias.clamp(0.5, 1.2)
+                    * (0.70 + press * 0.50)
+                    + OPEN_LANE_DRIBBLE_UPFIELD_APPETITE_BONUS * upfield)
+                    .clamp(0.0, OPEN_LANE_DRIBBLE_MAX_APPETITE);
+                if let Some(option) = action_options
+                    .iter_mut()
+                    .find(|option| option.label == "open-passing-lane")
+                {
+                    option.legal = true;
+                    option.score = option.score.max(appetite);
+                } else {
+                    action_options.push(AgentActionOptionTrace::new(
+                        "open-passing-lane",
+                        appetite,
+                        true,
+                    ));
+                }
+                open_lane_offered = true;
+            }
             let mut xavi_turn_offered = false;
             if snapshot.xavi_turn_enabled
                 && self.role != PlayerRole::Goalkeeper
