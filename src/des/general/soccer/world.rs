@@ -3393,20 +3393,12 @@ impl SoccerMatch {
             None
         };
 
-<<<<<<< HEAD
         // Tactical look-ahead (AlphaZero/MuZero-style planning): when a run opts in via
         // `DD_SOCCER_LOOKAHEAD_DEPTH >= 1` AND a trained world model is present, the value blend
-        // scores each candidate by rolling the world model one step forward and evaluating the
-        // predicted state (folded into the `neural_q` closure below). Depth 0 — the default, and
+        // scores each candidate by rolling the world model one step forward (`predict_next`) and
+        // evaluating the predicted state with the critic (folded into the `neural_q` closure
+        // below), rather than scoring the current state-action directly. Depth 0 — the default, and
         // forced when no world model exists — reproduces the direct depth-0 critic value
-=======
-        // Tactical look-ahead (AlphaZero/MuZero-style planning): when a run opts in
-        // via `DD_SOCCER_LOOKAHEAD_DEPTH >= 1` AND a trained world model is present,
-        // score each candidate by rolling the world model forward (`predict_next`)
-        // and evaluating the predicted state with the critic, rather than scoring the
-        // current state-action directly. Depth 0 — the default, and the forced value
-        // when no world model exists — reproduces the direct depth-0 critic value
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
         // byte-for-byte, so play is unchanged unless a run opts in.
         let lookahead_depth = if self.world_model.is_some() {
             dd_soccer_lookahead_depth()
