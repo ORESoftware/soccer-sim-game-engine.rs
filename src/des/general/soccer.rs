@@ -12950,7 +12950,6 @@ pub struct SoccerNeuralLearningConfig {
     /// units differ from the per-tick centered reward.
     #[serde(default)]
     pub critic_baseline_weight: f64,
-<<<<<<< HEAD
     /// **MAPPO cooperative-credit share**: how much each agent's policy-gradient
     /// reward is replaced by its *team's* per-tick mean reward, before the
     /// existing zero-sum opponent centering. `0.0` (the default) is the fully
@@ -12966,8 +12965,6 @@ pub struct SoccerNeuralLearningConfig {
     /// the centralized critic/advantage during the MAPPO update.
     #[serde(default)]
     pub mappo_team_reward_share: f64,
-=======
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
     /// Multi-agent learning mode. MAPPO keeps one decentralized actor per player
     /// decision while shaping the critic/advantage with centralized team rewards.
     #[serde(default)]
