@@ -30544,8 +30544,9 @@ impl SoccerPolicyHead {
             if !advantage.is_finite() {
                 continue;
             }
+            let input = self.policy_input(&sample.state_features, sample.role);
             let result = self.network.train_policy_gradient_sample(
-                &sample.state_features[..],
+                &input,
                 sample.action_index,
                 advantage,
                 SOCCER_POLICY_ENTROPY_COEFF,
