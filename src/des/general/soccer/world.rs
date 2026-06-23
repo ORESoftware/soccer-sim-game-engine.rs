@@ -4444,10 +4444,7 @@ impl SoccerMatch {
 
     fn ensure_policy_head(&mut self) {
         if self.policy_head.is_none() {
-            self.policy_head = Some(SoccerPolicyHead::new_with_options(
-                self.config.seed,
-                self.neural_blend.policy_role_embedding,
-            ));
+            self.policy_head = Some(SoccerPolicyHead::new(self.config.seed));
         }
     }
 
