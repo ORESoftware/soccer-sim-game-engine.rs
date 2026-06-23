@@ -15845,15 +15845,12 @@ pub struct WorldSnapshot {
     /// to gate the candidate; defaults on.
     #[serde(default = "default_true")]
     pub(crate) xavi_turn_enabled: bool,
-<<<<<<< HEAD
-=======
     /// Whether obstacle-aware loose-ball intercept feasibility is active this match (the env flag
     /// `DD_SOCCER_ENABLE_OBSTACLE_AWARE_INTERCEPT` OR the match config, folded once at snapshot
     /// build). Read by [`WorldSnapshot::loose_ball_intercept_solution_for`]; defaults off so the
     /// straight-line reach is byte-identical.
     #[serde(default)]
     pub(crate) obstacle_aware_intercept_enabled: bool,
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
     #[serde(default = "default_pass_anticipation_enabled")]
     pub pass_anticipation_enabled: bool,
     #[serde(default = "default_local_mpc_max_players_per_team")]
