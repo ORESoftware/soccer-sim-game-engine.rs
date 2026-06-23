@@ -23715,8 +23715,7 @@ impl WorldSnapshot {
         // was offside whenever a pass came. Once our ball is in flight (a targeted pass
         // or an over-the-top), the offside for this play has already been assessed, so
         // the runner may legally break beyond to chase it.
-        let ball_released =
-            self.pending_pass.is_some() || self.ball.untargeted_long_ball_flight.is_some();
+        let ball_released = self.pending_pass.is_some();
         let run_y = if dd_soccer_disable_onside_support_hold() || ball_released {
             self.open_space_support_line_y(me.team, line_y)
         } else {
