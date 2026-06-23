@@ -66382,7 +66382,8 @@ fn away_clear_goal_approach_shot_probability_ramps_toward_home_goal() {
     sim.players[keeper].skills.goalkeeping = 5.0;
 
     let mut previous_shoot = 0.0;
-    for (idx, y) in [32.0_f64, 26.0, 20.0].into_iter().enumerate() {
+    // Within the 30yd shot cap (Away goal at y=0 => yards = y => 26, 20, 14), ramping toward goal.
+    for (idx, y) in [26.0_f64, 20.0, 14.0].into_iter().enumerate() {
         sim.players[attacker].position = Vec2::new(40.0, y);
         sim.players[attacker].velocity = Vec2::new(0.0, -4.0);
         sim.ball.holder = Some(attacker);
