@@ -987,14 +987,6 @@ pub fn validate_soccer_neural_learning_config_for_learning_run(
     if !(0.0..=1.0).contains(&config.mappo_clip_epsilon) || config.mappo_clip_epsilon <= 0.0 {
         return Err(
             "mappoClipEpsilon must be in (0, 1] when neural learning is enabled".to_string(),
-<<<<<<< HEAD
-=======
-        );
-    }
-    if !(0.0..=1.0).contains(&config.mappo_team_reward_share) {
-        return Err(
-            "mappoTeamRewardShare must be in [0, 1] when neural learning is enabled".to_string(),
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
         );
     }
     Ok(())
