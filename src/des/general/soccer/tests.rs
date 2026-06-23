@@ -65711,7 +65711,8 @@ fn goal_proximity_lifts_shot_and_single_threaded_pass_together() {
     let mut previous_killer_score = 0.0;
     let mut previous_decisive_probability = 0.0;
     let mut previous_recycle_probability = f64::INFINITY;
-    for (idx, y) in [82.0, 88.0, 94.0].into_iter().enumerate() {
+    // Positions within the 30yd shot cap (yards_to_goal = 120 - y => 26, 20, 14), ramping in.
+    for (idx, y) in [94.0, 100.0, 106.0].into_iter().enumerate() {
         sim.players[attacker].position = Vec2::new(39.0, y);
         sim.players[attacker].velocity = Vec2::new(0.2, 3.8);
         sim.players[runner].position = Vec2::new(47.0, (y + 12.0).min(108.0));
