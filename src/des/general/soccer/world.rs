@@ -29740,6 +29740,7 @@ impl WorldSnapshot {
                     + wingback_flank_opening_bonus
                     + dynamic_lane_fit_bonus
                     + ball_arrival_bonus
+                    + short_outlet_bonus
                     - offside_penalty
                     - lane_position_penalty
                     - teammate_occupation_penalty
