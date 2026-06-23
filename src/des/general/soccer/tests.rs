@@ -28831,31 +28831,32 @@ fn policy_head_mappo_clip_bounds_old_policy_ratio() {
 
 #[test]
 fn role_embedding_lets_one_shared_actor_specialise_per_position() {
-    // The same state, reinforced for a Forward and penalised for a Defender, must
-    // pull `π(shoot)` in opposite directions for the two roles — only possible if
-    // the shared net conditions on the appended role one-hot.
-    let mut head = SoccerPolicyHead::new_with_options(31, true);
-    let mut state = [0.0f64; SOCCER_NEURAL_FEATURE_DIM];
-    state[0] = 0.4;
-    state[7] = -0.2;
+    // The same underlying state, reinforced for a Forward and penalised for a Defender, must
+    // pull `π(shoot)` in opposite directions across the two role-conditioned inputs — only
+    // possible if the shared net conditions on the role one-hot baked into the policy features
+    // by `soccer_policy_features_for_role`.
+    let mut head = SoccerPolicyHead::new(31);
+    let mut critic_state = [0.0f64; SOCCER_NEURAL_FEATURE_DIM];
+    critic_state[0] = 0.4;
+    critic_state[7] = -0.2;
+    let forward_state = soccer_policy_features_for_role(&critic_state, PlayerRole::Forward);
+    let defender_state = soccer_policy_features_for_role(&critic_state, PlayerRole::Defender);
     let shoot = soccer_policy_action_index("shoot").expect("shoot policy action");
 
     let samples: Vec<SoccerPolicySample> = (0..60)
         .flat_map(|_| {
             [
                 SoccerPolicySample {
-                    state_features: state,
+                    state_features: forward_state,
                     action_index: shoot,
                     advantage: 1.0,
                     old_action_probability: None,
-                    role: PlayerRole::Forward,
                 },
                 SoccerPolicySample {
-                    state_features: state,
+                    state_features: defender_state,
                     action_index: shoot,
                     advantage: -1.0,
                     old_action_probability: None,
-                    role: PlayerRole::Defender,
                 },
             ]
         })
@@ -28863,30 +28864,15 @@ fn role_embedding_lets_one_shared_actor_specialise_per_position() {
     head.train(&samples, None);
 
     let forward_shoot = head
-        .action_distribution_for_role(&state, PlayerRole::Forward)
+        .action_distribution(&forward_state)
         .expect("finite forward dist")[shoot];
     let defender_shoot = head
-        .action_distribution_for_role(&state, PlayerRole::Defender)
+        .action_distribution(&defender_state)
         .expect("finite defender dist")[shoot];
     assert!(
         forward_shoot > defender_shoot,
         "role embedding should specialise the shared actor: forward π(shoot)={forward_shoot} \
          should exceed defender π(shoot)={defender_shoot}"
-    );
-
-    // A role-LESS actor (the default) must ignore the role argument entirely — the
-    // distribution is identical regardless of role, proving the embedding is inert
-    // and the default path is byte-identical.
-    let plain = SoccerPolicyHead::new(31);
-    let as_forward = plain
-        .action_distribution_for_role(&state, PlayerRole::Forward)
-        .expect("finite dist");
-    let as_defender = plain
-        .action_distribution_for_role(&state, PlayerRole::Defender)
-        .expect("finite dist");
-    assert_eq!(
-        as_forward, as_defender,
-        "role-less actor must not condition on role"
     );
 }
 
