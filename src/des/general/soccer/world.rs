@@ -3464,21 +3464,11 @@ impl SoccerMatch {
         };
         let neural_q = |label: &str| -> Option<f64> {
             let learner = learner?;
-<<<<<<< HEAD
             // Look-ahead-aware critic value: depth 0 is the direct critic (byte-identical to the
             // pre-look-ahead path, since `model_based_lookahead_value` at depth 0 == predict_value
             // of the same features); depth >= 1 rolls the world model one step forward first.
-            self.model_based_lookahead_value(
-                transition,
-                &transition.action,
-                learner,
-                lookahead_depth,
-            )
-            .map(|v| v * target_scale)
-=======
             self.model_based_lookahead_value(&base, label, learner, lookahead_depth)
                 .map(|v| v * target_scale)
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
         };
         let mut scored_candidates = Vec::with_capacity(legal.len());
         for candidate in legal.iter() {
