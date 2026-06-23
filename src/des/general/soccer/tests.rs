@@ -53159,7 +53159,6 @@ fn xavi_turn_orbit_keeps_ball_on_far_side_and_arcs_around() {
         "xavi-turn uses its own sweep rate: rate={rate}"
     );
 }
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
 
 #[test]
 fn xavi_turn_move_target_wheels_around_the_defender() {
