@@ -3387,7 +3387,7 @@ impl SoccerMatch {
             let state_features = self.policy_state_features(&base);
             self.policy_head
                 .as_ref()
-                .and_then(|head| head.action_distribution_for_role(&state_features, role))
+                .and_then(|head| head.action_distribution(&state_features))
                 .map(|dist| dist.iter().map(|&p| p.max(1e-8).ln()).collect())
         } else {
             None
