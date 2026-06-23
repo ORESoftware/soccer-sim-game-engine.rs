@@ -502,11 +502,6 @@ const ROUND_KEEPER_MIN_SPOT_SPACE_YARDS: f64 = 1.4;
 // burst around them before they smother the angle.
 const ROUND_KEEPER_SPRINT_PRESSURE: f64 = 0.55;
 const ROUND_KEEPER_SPRINT_TRACK_YPS: f64 = 4.0;
-// Decision (MDP/POMDP) appetite: a strong option (it converts a low-percentage long shot into a
-// close clear strike), lifted by how blocked the current shot is and how much closer the clear spot
-// is, capped so it does not override an already-clear close shot.
-const ROUND_KEEPER_BASE_APPETITE: f64 = 0.85;
-const ROUND_KEEPER_MAX_APPETITE: f64 = 1.80;
 /// Below this tangential speed (yps) a `xavi-turn` carrier is treated as not yet wheeling, so
 /// the wheel sense is seeded from geometry rather than from its (negligible) momentum.
 const XAVI_TURN_WHEEL_MOMENTUM_EPS_YPS: f64 = 0.5;
