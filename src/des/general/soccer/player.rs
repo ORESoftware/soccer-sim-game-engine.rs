@@ -6644,6 +6644,9 @@ impl PlayerAgent {
                 order_names.push(format!("learned-mpc-reselect:{}", label));
             }
             let mut chosen = None;
+            // Set by the open-passing-lane arm to its precise sprint decision (very high pressure /
+            // a fast-tracking opponent), overriding the generic carry sprint rule below.
+            let mut open_lane_sprint: Option<bool> = None;
             for op in ops {
                 match op.as_str() {
                     "shoot" => {
