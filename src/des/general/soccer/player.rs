@@ -9325,16 +9325,6 @@ pub enum DribbleMoveKind {
     LeftCut,
     RightCut,
     Nutmeg,
-<<<<<<< HEAD
-=======
-    /// The "Xavi turn": a near-full (~280-300 degree) shielded pirouette. The carrier keeps
-    /// the ball on the FAR side of the nearest defender for the whole arc and wheels
-    /// the long way AROUND them — a longer but safer path that turns the defender
-    /// rather than trying to knock the ball past. While turning, the ball is so well
-    /// protected that a clean steal is capped near 10% (see
-    /// [`XAVI_TURN_TACKLE_SUCCESS_CAP`]). Gated by [`xavi_turn_enabled`].
-    XaviTurn,
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
     FakeLeftCutRight,
     FakeRightCutLeft,
     /// The "Xavi turn": a near-full (~280-300°) shielded pirouette. The carrier keeps
