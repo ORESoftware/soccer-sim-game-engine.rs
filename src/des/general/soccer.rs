@@ -47405,10 +47405,17 @@ fn modulated_pass_speed_yps(
     receiver_openness: f64,
     _rng: &mut SeededRandom,
 ) -> f64 {
-    // A scoop keeps its slow fixed launch speed — distance-calibration would speed it back
-    // up to a normal lofted pass and defeat the purpose (a gentle dink over a close defender).
+    // A scoop must LAND ON the receiver. It is aloft for the gravity hang time set by its (modest,
+    // fixed) apex, so the only launch pace that drops it on the target is distance / hang_time. The
+    // old fixed-slow scoop ignored distance: a short chip stayed up its full hang time and floated
+    // down well past a near receiver (a "balloon"). Capped to a gentle dink band so the
+    // calibration can never speed it up into a driven loft — it stays a soft chip over the block.
     if flight.is_scoop() {
-        return raw_speed_yps;
+        let _ = raw_speed_yps;
+        let distance = from.distance(target).max(0.1);
+        let hang_time = 2.0 * (2.0 * SCOOP_LOFT_APEX_YARDS / GRAVITY_YPS2).sqrt();
+        let land_at_target = (distance / hang_time.max(0.35)) * AERIAL_LAND_AT_TARGET_DRAG_COMP;
+        return land_at_target.clamp(mph_to_yps(6.0), mph_to_yps(26.0));
     }
     let distance = from.distance(target).max(0.1);
     let openness = receiver_openness.clamp(0.0, 1.0);
