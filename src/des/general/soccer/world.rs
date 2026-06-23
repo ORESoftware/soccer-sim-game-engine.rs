@@ -20222,8 +20222,8 @@ impl WorldSnapshot {
         mut target: Vec2,
     ) -> Vec2 {
         // Applies to attacking players (forwards and midfielders): when our team
-        // has the ball and they are not on a sanctioned timed in-behind run, allow
-        // only a marginal 0-3yd open-space stretch beyond the last line.
+        // has the ball and they are not on a sanctioned timed in-behind run, hold an
+        // ONSIDE support position level with the last defender (on the shoulder).
         if self.possession_team() != Some(player.team)
             || self.ball.holder == Some(player.id)
             || !matches!(player.role, PlayerRole::Forward | PlayerRole::Midfielder)
@@ -20236,7 +20236,15 @@ impl WorldSnapshot {
         };
         let half_line = self.field_length * 0.5;
         let attack = player.team.attack_dir();
-        let cap_y = self.open_space_support_line_y(player.team, line_y);
+        // Idle supporters hold level with the line (onside). Only a sanctioned timed
+        // in-behind run (excluded above) may stretch beyond it. The legacy behaviour
+        // parked them OPEN_SPACE_RUN_OFFSIDE_TOLERANCE_YARDS past the line — a standing
+        // offside position — so any ball that reached them was flagged.
+        let cap_y = if dd_soccer_disable_onside_support_hold() {
+            self.open_space_support_line_y(player.team, line_y)
+        } else {
+            line_y
+        };
         let beyond_line = (target.y - cap_y) * attack > 0.0;
         let in_attacking_half = (target.y - half_line) * attack > 0.0;
         if in_attacking_half && beyond_line {
