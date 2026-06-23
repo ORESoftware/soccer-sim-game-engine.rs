@@ -5565,6 +5565,111 @@ mod tests {
         assert!(validate_soccer_learning_curriculum_config_for_learning_run(&invalid).is_err());
     }
 
+    fn curriculum_test_base_config() -> MatchConfig {
+        let mut config = MatchConfig::default();
+        config.field_length_yards = 120.0;
+        config.field_width_yards = 80.0;
+        config.duration_seconds = 600.0;
+        config.half_duration_seconds = 300.0;
+        config.formation_lp_enabled = true;
+        config.neural_learning.mappo_team_reward_share = 0.8;
+        config
+    }
+
+    #[test]
+    fn curriculum_stage_shaping_ramps_monotonically_and_full_match_is_identity() {
+        use SoccerLearningCurriculumStage::*;
+        let stages = [
+            Locomotion, BallSkills, Duels, SmallSided, TeamShape, FullMatch,
+        ];
+        let mut previous: Option<SoccerCurriculumStageShaping> = None;
+        for stage in stages {
+            let shaping = soccer_curriculum_stage_shaping(stage);
+            assert!((0.0..=1.0).contains(&shaping.pitch_fraction));
+            assert!((0.0..=1.0).contains(&shaping.duration_fraction));
+            assert!((0.0..=1.0).contains(&shaping.team_reward_share_fraction));
+            if let Some(prev) = previous {
+                assert!(shaping.pitch_fraction >= prev.pitch_fraction);
+                assert!(shaping.duration_fraction >= prev.duration_fraction);
+                assert!(shaping.team_reward_share_fraction >= prev.team_reward_share_fraction);
+            }
+            previous = Some(shaping);
+        }
+        // FullMatch is the identity end of the ramp.
+        let full = soccer_curriculum_stage_shaping(FullMatch);
+        assert_eq!(full.pitch_fraction, 1.0);
+        assert_eq!(full.duration_fraction, 1.0);
+        assert_eq!(full.team_reward_share_fraction, 1.0);
+        assert!(full.formation_lp);
+    }
+
+    #[test]
+    fn applying_full_match_stage_leaves_config_byte_identical() {
+        let base = curriculum_test_base_config();
+        let mut config = base.clone();
+        apply_soccer_curriculum_stage_to_match_config(
+            SoccerLearningCurriculumStage::FullMatch,
+            &mut config,
+        );
+        assert_eq!(config.field_length_yards, base.field_length_yards);
+        assert_eq!(config.field_width_yards, base.field_width_yards);
+        assert_eq!(config.duration_seconds, base.duration_seconds);
+        assert_eq!(config.half_duration_seconds, base.half_duration_seconds);
+        assert_eq!(config.formation_lp_enabled, base.formation_lp_enabled);
+        assert!(
+            (config.neural_learning.mappo_team_reward_share
+                - base.neural_learning.mappo_team_reward_share)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn applying_early_stage_shrinks_pitch_duration_and_individualises_reward() {
+        let mut config = curriculum_test_base_config();
+        // Locomotion = 0.25 pitch/duration, 0.0 team share, formation off.
+        apply_soccer_curriculum_stage_to_match_config(
+            SoccerLearningCurriculumStage::Locomotion,
+            &mut config,
+        );
+        // 120*0.25=30 < 40yd floor, so the length floors to the minimum box.
+        assert_eq!(config.field_length_yards, 40.0);
+        assert_eq!(config.field_width_yards, 30.0);
+        // 600*0.25=150 (above the 20s floor), half 300*0.25=75.
+        assert_eq!(config.duration_seconds, 150.0);
+        assert_eq!(config.half_duration_seconds, 75.0);
+        // Individual reward only, and the formation LP disengaged.
+        assert_eq!(config.neural_learning.mappo_team_reward_share, 0.0);
+        assert!(!config.formation_lp_enabled);
+
+        // Small-sided keeps formation on (AND with true) and partially shares the reward.
+        let mut shaped = curriculum_test_base_config();
+        apply_soccer_curriculum_stage_to_match_config(
+            SoccerLearningCurriculumStage::SmallSided,
+            &mut shaped,
+        );
+        assert!(shaped.formation_lp_enabled);
+        assert!((shaped.neural_learning.mappo_team_reward_share - 0.8 * 0.35).abs() < 1e-12);
+        assert!(shaped.field_length_yards < 120.0 && shaped.field_length_yards > 40.0);
+    }
+
+    #[test]
+    fn curriculum_is_inert_when_disabled() {
+        // With the curriculum env unset (the default), the per-episode hook is a no-op and
+        // leaves the config untouched — the pre-curriculum learner is byte-identical.
+        if !soccer_curriculum_enabled_from_env() {
+            let base = curriculum_test_base_config();
+            let mut config = base.clone();
+            assert!(maybe_apply_soccer_curriculum_for_episode(3, &mut config).is_none());
+            assert_eq!(config.field_length_yards, base.field_length_yards);
+            assert_eq!(config.duration_seconds, base.duration_seconds);
+            assert_eq!(
+                config.neural_learning.mappo_team_reward_share,
+                base.neural_learning.mappo_team_reward_share
+            );
+        }
+    }
+
     #[test]
     fn promotion_gate_uses_quality_and_sample_floor_before_activation() {
         use crate::des::general::soccer::MatchStats;
