@@ -30400,6 +30400,10 @@ struct SoccerPolicySample {
     action_index: usize,
     advantage: f64,
     old_action_probability: Option<f64>,
+    /// Acting player's role, used only when the actor's role embedding is on; the
+    /// head appends its one-hot to `state_features` at train/inference time. When
+    /// the embedding is off the role is ignored, so this is inert by default.
+    role: PlayerRole,
 }
 
 /// The neural **actor**: `π(family | s)` over [`SOCCER_POLICY_ACTIONS`], trained
