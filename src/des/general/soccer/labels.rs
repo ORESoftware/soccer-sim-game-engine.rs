@@ -87,15 +87,11 @@ pub enum SoccerActionLabel {
     /// On-ball: a short carrier dribble to change the passing angle and open a
     /// currently-blocked teammate lane.
     OpenPassLane,
-<<<<<<< HEAD
     /// On-ball: a short, quick carry around the goalkeeper — closer to goal and off the
     /// keeper's covered angle — to open a clear shot, instead of a long shot the keeper
-    /// saves. See `WorldSnapshot::dribble_round_the_keeper_for`.
-    RoundTheKeeper,
-=======
-    /// On-ball: dribble around the goalkeeper to open a closer shooting lane.
+    /// saves. Unifies the two convergent "round the keeper" carries onto one label /
+    /// implementation (`round_goalkeeper_plan` + `RoundGoalkeeperDribblePlan`).
     RoundGoalkeeper,
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
     // --- off-ball: support / movement ---
     Space,
     SupportShape,
