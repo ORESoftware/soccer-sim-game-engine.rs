@@ -623,6 +623,7 @@ pub fn validate_soccer_neural_learning_config_for_learning_run(
         ("targetScale", config.target_scale),
         ("targetClip", config.target_clip),
         ("criticBaselineWeight", config.critic_baseline_weight),
+        ("mappoTeamRewardShare", config.mappo_team_reward_share),
     ] {
         if !value.is_finite() {
             return Err(format!("{name} must be finite"));
