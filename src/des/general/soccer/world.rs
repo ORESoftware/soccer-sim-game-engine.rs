@@ -4343,16 +4343,12 @@ impl SoccerMatch {
         // Per-tick team reward aggregation for centralized MARL shaping.
         let tick_rewards = soccer_marl_tick_rewards(replay);
 
-<<<<<<< HEAD
-        // Per-transition reward advantage. Both convergent cooperative-MARL shapings are unified in
-        // `soccer_marl_adjusted_reward`: ours' MAPPO team-reward SHARE blends each agent's reward
-        // toward its team's per-tick mean, and theirs' centralized weighting then scales that
-        // (intermediate) signal and adds the zero-sum (own − opponent) team component. Each knob
-        // reduces to a no-op at its default, so the default path is byte-identical to before.
-=======
-        // Per-transition row: MARL-adjusted reward, critic value (in reward
-        // units), terminal flag, action index, and state features.
->>>>>>> c4fa5d4a3a2ec034db5f3b0d07598e17452f19a1
+        // Per-transition row: the MARL-adjusted reward (critic value in reward units), terminal
+        // flag, action index, and state features. Both convergent cooperative-MARL shapings are
+        // unified in `soccer_marl_adjusted_reward`: ours' MAPPO team-reward SHARE blends each
+        // agent's reward toward its team's per-tick mean, and theirs' centralized weighting then
+        // scales that (intermediate) signal and adds the zero-sum (own − opponent) team component.
+        // Each knob reduces to a no-op at its default, so the default path is byte-identical.
         let reward_adv: Vec<f64> = replay
             .iter()
             .map(|transition| {
