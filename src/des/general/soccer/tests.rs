@@ -27600,15 +27600,16 @@ fn shot_launch_speed_stays_within_fifty_to_seventytwo_mph_band() {
             let speed = shot_speed_yps_from_power(power, skills);
             assert!(
                 speed >= floor - 1e-9 && speed <= cap + 1e-9,
-                "shot launch must stay in the 40-60 mph band (power={power}, speed_yps={speed})"
+                "shot launch must stay in the 50-72 mph band (power={power}, speed_yps={speed})"
             );
         }
     }
 
-    // The floor is genuinely reached: a zero-power poke still leaves at exactly 40 mph.
+    // The floor is genuinely reached: a zero-power poke still leaves at exactly 50 mph.
     assert!((shot_speed_yps_from_power(0.0, &weak) - floor).abs() < 1e-9);
-    // The cap is genuinely reached: an elite full-power strike tops out at 60 mph.
-    assert!((shot_speed_yps_from_power(1.0, &elite) - cap).abs() < mph_to_yps(0.5));
+    // An elite full-power strike tops out near 70 mph (just under the 72 mph cap).
+    let elite_full = shot_speed_yps_from_power(1.0, &elite);
+    assert!(elite_full >= mph_to_yps(69.0) && elite_full <= cap + 1e-9);
 }
 
 #[test]
