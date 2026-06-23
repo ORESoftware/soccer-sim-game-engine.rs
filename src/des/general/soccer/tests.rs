@@ -66318,7 +66318,8 @@ fn clear_goal_approach_shot_probability_ramps_before_must_shoot_window() {
     sim.players[keeper].skills.goalkeeping = 5.0;
 
     let mut previous_shoot = 0.0;
-    for (idx, y) in [88.0, 94.0, 100.0].into_iter().enumerate() {
+    // Within the 30yd shot cap (yards_to_goal = 120 - y => 26, 20, 14), ramping toward goal.
+    for (idx, y) in [94.0, 100.0, 106.0].into_iter().enumerate() {
         sim.players[attacker].position = Vec2::new(40.0, y);
         sim.players[attacker].velocity = Vec2::new(0.0, 4.0);
         sim.ball.holder = Some(attacker);
