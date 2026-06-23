@@ -12752,7 +12752,6 @@ pub struct SoccerNeuralLearningConfig {
     /// units differ from the per-tick centered reward.
     #[serde(default)]
     pub critic_baseline_weight: f64,
-<<<<<<< HEAD
     /// **MAPPO cooperative-credit share**: how much each agent's policy-gradient
     /// reward is replaced by its *team's* per-tick mean reward, before the
     /// existing zero-sum opponent centering. `0.0` (the default) is the fully
@@ -12762,9 +12761,12 @@ pub struct SoccerNeuralLearningConfig {
     /// advantage in `neural_policy_training_samples` then credits a teammate's
     /// later goal back to the off-ball work that set it up). `1.0` is a fully
     /// shared team reward (classic cooperative MARL). Clamped to `[0, 1]`.
+    ///
+    /// Complements the `marl_*` fields below: this share folds the team mean into
+    /// the per-transition reward at capture time, while the `marl_*` weights shape
+    /// the centralized critic/advantage during the MAPPO update.
     #[serde(default)]
     pub mappo_team_reward_share: f64,
-=======
     /// Multi-agent learning mode. MAPPO keeps one decentralized actor per player
     /// decision while shaping the critic/advantage with centralized team rewards.
     #[serde(default)]
@@ -12779,7 +12781,6 @@ pub struct SoccerNeuralLearningConfig {
     /// PPO clip epsilon for MAPPO actor updates.
     #[serde(default = "default_soccer_mappo_clip_epsilon")]
     pub mappo_clip_epsilon: f64,
->>>>>>> origin/alex-1
 }
 
 impl Default for SoccerNeuralLearningConfig {
