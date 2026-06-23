@@ -899,6 +899,15 @@ const SHOT_DISTANCE_REWARD_PIVOT_YARDS: f64 = 20.0;
 const SHOT_CLOSE_REWARD_PER_YARD: f64 = 0.9;
 const SHOT_FAR_PENALTY_PER_YARD: f64 = 1.6;
 const SHOT_DISTANCE_REWARD_MAX_POINTS: f64 = 14.0;
+// FLANK / WING usage reward (#8): credit the on-ball player for working the ball in a WIDE channel
+// (toward a touchline), scaled UP when the team is in its OWN half — get it out of the congested
+// central area in front of our own goal and down the wings. Wideness 0 = central spine, 1 =
+// touchline; only the outer band (>= MIN_WIDENESS) earns it. The own-half reward is the larger one
+// and tapers to the smaller attacking-half reward by the halfway line (central play near the
+// opponent goal is fine). A modest per-tick shaping term, in line with the other dense rewards.
+const FLANK_USAGE_MIN_WIDENESS: f64 = 0.5;
+const FLANK_USAGE_OWN_HALF_REWARD: f64 = 0.6;
+const FLANK_USAGE_ATTACKING_HALF_REWARD: f64 = 0.2;
 // A shot OFF the frame still earns a small attempt reward (vs the on-frame value).
 const SHOT_OFF_TARGET_REWARD_POINTS: f64 = 10.0;
 // Shot accuracy: a missed effort that crosses the line more than this far outside the
