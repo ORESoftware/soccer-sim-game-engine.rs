@@ -9817,13 +9817,6 @@ impl SoccerMatch {
                         success_probability = (success_probability
                             * (1.0 + holder_dizziness * DIZZINESS_DISPOSSESSION_RISK))
                             .clamp(0.0, 0.95);
-<<<<<<< HEAD
-                        // Shielding (body between ball and defender) forces possession:
-                        // a static protect-ball shield caps the steal at 20%, and a xavi-turn
-                        // is even harder — reduced further to XAVI_TURN_DISPOSSESSION_PROBABILITY
-                        // (~10%) by the downstream `holder_is_xavi_turn` adjustment below.
-=======
->>>>>>> 0c1609de0683c97a233933382eedace0d27de26f
                         let holder_is_xavi_turn =
                             matches!(target_dribble_kind, Some(DribbleMoveKind::XaviTurn));
                         // Shielding (body between ball and defender) forces possession:
