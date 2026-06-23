@@ -53131,8 +53131,6 @@ fn xavi_turn_clean_steal_is_capped_at_ten_percent() {
     );
 }
 
-<<<<<<< HEAD
-=======
 #[test]
 fn xavi_turn_orbit_keeps_ball_on_far_side_and_arcs_around() {
     // The carried-ball orbit on a xavi-turn holds the ball on the FAR side of the defender
