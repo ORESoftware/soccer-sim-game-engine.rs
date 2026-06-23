@@ -888,6 +888,16 @@ const SHOT_ON_TARGET_SCORING_SCALE_FLOOR: f64 = 0.04;
 // inside ~16yd, ~0.7 at 20yd, ~0.45 at 25yd, ~0.16 at 30yd, floored beyond.
 const SHOT_FULL_REWARD_DISTANCE_YARDS: f64 = 16.0;
 const SHOT_REWARD_TAPER_PER_YARD: f64 = 0.065;
+// Shot-distance reward shaping, pivoting on 20yd (the user's "shoot closer" rule). A shot from
+// INSIDE 20yd is rewarded, rising as the shooter gets nearer goal; a shot from OUTSIDE 20yd (up to
+// the hard 30yd cap) is penalised, escalating with distance — relieved only when the keeper is
+// genuinely beatable / out of position so a real long-range chance still gets taken. Applied to
+// every `shoot` transition so the MDP/POMDP learns to work the ball into 20yd before pulling the
+// trigger.
+const SHOT_DISTANCE_REWARD_PIVOT_YARDS: f64 = 20.0;
+const SHOT_CLOSE_REWARD_PER_YARD: f64 = 0.9;
+const SHOT_FAR_PENALTY_PER_YARD: f64 = 1.6;
+const SHOT_DISTANCE_REWARD_MAX_POINTS: f64 = 14.0;
 // A shot OFF the frame still earns a small attempt reward (vs the on-frame value).
 const SHOT_OFF_TARGET_REWARD_POINTS: f64 = 10.0;
 // Shot accuracy: a missed effort that crosses the line more than this far outside the
