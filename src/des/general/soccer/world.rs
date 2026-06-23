@@ -22873,13 +22873,26 @@ impl WorldSnapshot {
                     direct_opponent_aim_score_penalty(direct_opponent_control_risk);
                 // HARD veto (the real fix for "passing straight to the opposition"): if the aim
                 // point is clearly closer to an opponent than to the intended receiver, sink the
-                // candidate so it never wins over holding or a safe outlet.
-                let direct_opponent_aim_veto =
-                    if self.pass_point_directly_favors_opponent(me.team, position, pass_point) {
-                        PASS_DIRECT_OPPONENT_AIM_HARD_VETO_PENALTY
-                    } else {
-                        0.0
-                    };
+                // candidate so it never wins over holding or a safe outlet. The second clause
+                // closes the man-marked-receiver / ball-to-the-feet hole the aim-point test
+                // misses (an opponent level-with-or-in-front of a receiver who is himself at the
+                // aim point), so a pressured holder can't feed a tightly-marked teammate.
+                let passer_pressure_for_veto =
+                    self.attacker_pressure_on_point(me.team, me_position);
+                let direct_opponent_aim_veto = if self
+                    .pass_point_directly_favors_opponent(me.team, position, pass_point)
+                    || self.pass_reception_conceded_to_opponent(
+                        me.team,
+                        position,
+                        me_position,
+                        pass_point,
+                        score_nominal_speed,
+                        passer_pressure_for_veto,
+                    ) {
+                    PASS_DIRECT_OPPONENT_AIM_HARD_VETO_PENALTY
+                } else {
+                    0.0
+                };
                 // Pointless short ball: under low pressure, a sub-4yd pass to a teammate who
                 // is no more open than the holder neither escapes pressure nor progresses —
                 // demote it. Allowed when the receiver is clearly less pressured (an escape).
