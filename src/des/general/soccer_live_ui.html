@@ -103,6 +103,75 @@
     border: 1px solid #126233;
     border-radius: 6px;
   }
+  /* Floating menu shown when a player is clicked: jersey #, formation position and
+     keyboard-control actions. Lives on <body> (not .stage, which clips overflow). */
+  #playerMenu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 188px;
+    max-width: 260px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: 0 12px 32px rgba(8, 18, 26, .30);
+    overflow: hidden;
+    font-size: 13px;
+    user-select: none;
+  }
+  #playerMenu[hidden] { display: none; }
+  #playerMenu .pm-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 11px;
+    background: var(--ink);
+    color: #fff;
+  }
+  #playerMenu .pm-jersey {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .85);
+  }
+  #playerMenu .pm-id { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+  #playerMenu .pm-id b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #playerMenu .pm-pos { color: #aeb9c2; font-size: 11px; white-space: nowrap; }
+  #playerMenu .pm-actions { padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+  #playerMenu .pm-btn {
+    width: 100%;
+    text-align: left;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #playerMenu .pm-btn:hover { background: #f0f4f7; }
+  #playerMenu .pm-btn.pm-primary { background: #eafaf1; border-color: #9fe3bf; font-weight: 600; }
+  #playerMenu .pm-btn.pm-danger { color: #b3261e; }
+  #playerMenu .pm-note { padding: 4px 6px 2px; color: var(--muted); font-size: 12px; }
+  #playerMenu .pm-slots { display: flex; gap: 4px; padding: 0 6px 8px; }
+  #playerMenu .pm-slot {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    font-weight: 700;
+    cursor: pointer;
+    color: var(--ink);
+  }
+  #playerMenu .pm-slot.active { color: #fff; }
   aside {
     min-width: 0;
     border-left: 1px solid var(--line);
@@ -3263,7 +3332,23 @@ function drawGaitCue(p, pt, r) {
     ctx.stroke();
   }
 }
-function drawPlayer(p, r) {
+// A glowing status ring around a player marker (goalkeeper highlight, ball
+// possession, etc). Drawn twice: a blurred pass for the neon glow, then a crisp
+// core stroke on top so the ring stays sharp against the pitch.
+function drawStatusRing(pt, radius, color, width, glow) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = glow;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.stroke();
+  ctx.restore();
+}
+function drawPlayer(p, r, holderId) {
   const pt = mapPoint(p.position, r);
   const color = p.team === "Home" ? "#1f6feb" : "#d64545";
   const assigned = p.controllerSlot != null;
@@ -3291,6 +3376,10 @@ function drawPlayer(p, r) {
   ctx.lineWidth = controlled ? 4.5 : assigned ? 3 : hovered ? 3 : 1.5;
   ctx.strokeStyle = controlled || assigned ? slotColor : hovered ? "#e5edf7" : "rgba(255,255,255,.9)";
   ctx.stroke();
+  // Goalkeepers get a neon-green halo; the player in possession gets a cyan one
+  // (concentric, so a keeper on the ball shows both).
+  if (p.role === "Goalkeeper") drawStatusRing(pt, 12.4, "#39ff14", 2.2, 12);
+  if (holderId != null && p.id === holderId) drawStatusRing(pt, 15.2, "#00e5ff", 2.6, 13);
   if (assigned) {
     ctx.fillStyle = slotColor;
     ctx.fillRect(pt.x - 10, pt.y - 24, 20, 13);
@@ -3400,7 +3489,8 @@ function drawField(frame, r) {
   drawSelectedVision(inspectedPlayer(), r);
   drawDecisionIntentTraces(r);
   for (const o of frame.officials || []) drawOfficial(o, r);
-  for (const p of frame.players || []) drawPlayer(p, r);
+  const holderId = frame.ball?.holder;
+  for (const p of frame.players || []) drawPlayer(p, r, holderId);
   if (frame.ball) drawBall(frame.ball, r);
   drawCoachHintMarkers(r);
   drawCoachHintDrag(r);
@@ -4656,31 +4746,202 @@ async function useSlot(slot) {
   }
 }
 
+// --- Click-to-select player menu --------------------------------------------
+// Clicking a player opens a small floating menu showing the jersey number and
+// formation position, and lets you take keyboard control of that player (assign a
+// controller slot), release control, or inspect.
+
+// Human-readable formation position from role + squad number, using the engine's
+// own 4-4-2 numbering (GK 1; LB 2 / RB 3 / CB 4,5; LM 11 / CM 6,8 / RM 7; ST 9,10).
+// Falls back to the generic role when the number is non-standard (e.g. tracking data).
+function formationPosition(p) {
+  const role = String(p?.role || "");
+  const shirt = Number(p?.shirt);
+  if (role === "Goalkeeper") return {full: "Goalkeeper", short: "GK"};
+  if (role === "Defender") {
+    if (shirt === 2) return {full: "Left Back", short: "LB"};
+    if (shirt === 3) return {full: "Right Back", short: "RB"};
+    if (shirt === 4 || shirt === 5) return {full: "Centre Back", short: "CB"};
+    return {full: "Defender", short: "DEF"};
+  }
+  if (role === "Midfielder") {
+    if (shirt === 6) return {full: "Defensive Mid", short: "DM"};
+    if (shirt === 8 || shirt === 4) return {full: "Centre Mid", short: "CM"};
+    if (shirt === 10) return {full: "Attacking Mid", short: "AM"};
+    if (shirt === 7) return {full: "Right Mid", short: "RM"};
+    if (shirt === 11) return {full: "Left Mid", short: "LM"};
+    return {full: "Midfielder", short: "MID"};
+  }
+  if (role === "Forward") {
+    if (shirt === 9) return {full: "Striker", short: "ST"};
+    if (shirt === 10) return {full: "Second Striker", short: "SS"};
+    if (shirt === 7) return {full: "Right Wing", short: "RW"};
+    if (shirt === 11) return {full: "Left Wing", short: "LW"};
+    return {full: "Forward", short: "FW"};
+  }
+  return {full: role || "Player", short: (role || "?").slice(0, 3).toUpperCase()};
+}
+
+let playerMenuEl = null;
+let playerMenuPlayerId = null;
+function ensurePlayerMenu() {
+  if (playerMenuEl) return playerMenuEl;
+  playerMenuEl = document.createElement("div");
+  playerMenuEl.id = "playerMenu";
+  playerMenuEl.hidden = true;
+  document.body.appendChild(playerMenuEl);
+  return playerMenuEl;
+}
+function closePlayerMenu() {
+  playerMenuPlayerId = null;
+  if (playerMenuEl) playerMenuEl.hidden = true;
+}
+function teamSwatch(team) {
+  return team === "Home" ? "var(--home)" : "var(--away)";
+}
+function pmButton(label, className, handler) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "pm-btn" + (className ? " " + className : "");
+  b.textContent = label;
+  b.addEventListener("click", handler);
+  return b;
+}
+async function controlPlayerWithSlot(player, slot) {
+  try {
+    await assignSlot(slot, player.id);
+    setActiveSlot(slot);
+    inspectedPlayerId = player.id;
+    statusEl.textContent = `slot ${slot + 1} → #${player.shirt} ${player.name} · arrow keys move, Enter = pass/shoot`;
+  } catch (err) {
+    statusEl.textContent = err.message;
+  }
+  closePlayerMenu();
+}
+async function releasePlayerControl(player) {
+  const slot = player.controllerSlot;
+  closePlayerMenu();
+  if (slot == null) return;
+  try {
+    await assignSlot(slot, null);
+    statusEl.textContent = `slot ${slot + 1} released — autonomous`;
+  } catch (err) {
+    statusEl.textContent = err.message;
+  }
+}
+function openPlayerMenu(player, clientX, clientY) {
+  if (!player) return;
+  const menu = ensurePlayerMenu();
+  playerMenuPlayerId = player.id;
+  inspectedPlayerId = player.id; // mirror the selection into the inspector panel
+  const pos = formationPosition(player);
+  const slots = humanSlotCount();
+  const controlledSlot = player.controllerSlot; // null when autonomous
+  menu.innerHTML = "";
+
+  // Header: jersey badge + name + formation position.
+  const head = document.createElement("div");
+  head.className = "pm-head";
+  const jersey = document.createElement("span");
+  jersey.className = "pm-jersey";
+  jersey.style.background = teamSwatch(player.team);
+  jersey.textContent = String(player.shirt);
+  const idWrap = document.createElement("span");
+  idWrap.className = "pm-id";
+  const nameEl = document.createElement("b");
+  nameEl.textContent = player.name || ("#" + player.shirt);
+  const posEl = document.createElement("span");
+  posEl.className = "pm-pos";
+  posEl.textContent = `#${player.shirt} · ${pos.full} · ${player.team}`;
+  idWrap.append(nameEl, posEl);
+  head.append(jersey, idWrap);
+  menu.appendChild(head);
+
+  // Actions: take/keep/release keyboard control, then inspect.
+  const actions = document.createElement("div");
+  actions.className = "pm-actions";
+  if (slots > 0) {
+    if (controlledSlot == null) {
+      actions.appendChild(pmButton(
+        `🎮 Control with keyboard (Slot ${activeSlot + 1})`, "pm-primary",
+        () => controlPlayerWithSlot(player, activeSlot)));
+    } else {
+      actions.appendChild(pmButton(
+        controlledSlot === activeSlot
+          ? "🎮 Keyboard control active"
+          : `🎮 Make active (Slot ${controlledSlot + 1})`,
+        "pm-primary",
+        () => controlPlayerWithSlot(player, controlledSlot)));
+      actions.appendChild(pmButton(
+        `⏏ Release control (Slot ${controlledSlot + 1})`, "pm-danger",
+        () => releasePlayerControl(player)));
+    }
+  } else {
+    const note = document.createElement("div");
+    note.className = "pm-note";
+    note.textContent = "No human controller slots configured";
+    actions.appendChild(note);
+  }
+  actions.appendChild(pmButton("🔍 Inspect details", "", () => {
+    inspectedPlayerId = player.id;
+    render();
+    closePlayerMenu();
+  }));
+  menu.appendChild(actions);
+
+  // With more than one human slot, offer a quick row to assign this player to a
+  // specific slot (coloured to match the on-pitch slot badges).
+  if (slots > 1) {
+    const slotRow = document.createElement("div");
+    slotRow.className = "pm-slots";
+    for (let s = 0; s < slots; s++) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "pm-slot" + (s === controlledSlot ? " active" : "");
+      chip.textContent = `S${s + 1}`;
+      chip.title = `Control with keyboard slot ${s + 1}`;
+      chip.style.borderColor = SLOT_COLORS[s % SLOT_COLORS.length];
+      if (s === controlledSlot) chip.style.background = SLOT_COLORS[s % SLOT_COLORS.length];
+      chip.addEventListener("click", () => controlPlayerWithSlot(player, s));
+      slotRow.appendChild(chip);
+    }
+    menu.appendChild(slotRow);
+  }
+
+  // Reveal, then clamp inside the viewport (the menu is position:fixed on <body>).
+  menu.hidden = false;
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = clamp(clientX + 8, 8, Math.max(8, window.innerWidth - rect.width - 8)) + "px";
+  menu.style.top = clamp(clientY + 8, 8, Math.max(8, window.innerHeight - rect.height - 8)) + "px";
+  render();
+}
+
 async function handlePitchClick(e) {
   if (!state?.frame?.players?.length) return;
   const hit = nearestPlayerAtCanvas(canvasPointFromEvent(e));
-  if (!hit) return;
+  if (!hit) { closePlayerMenu(); return; }
   const clicked = hit.player;
-  if (inspectModeEnabled() || e.shiftKey || e.altKey || e.metaKey || humanSlotCount() <= 0) {
+  // Modifier / inspect-mode clicks keep their quick-inspect shortcut (no menu).
+  if (inspectModeEnabled() || e.shiftKey || e.altKey || e.metaKey) {
     inspectedPlayerId = clicked.id;
     statusEl.textContent = `inspect ${clicked.shirt} ${clicked.name}`;
+    closePlayerMenu();
     render();
     return;
   }
+  // Fast pass-target path: while controlling the ball holder, click a teammate to
+  // aim the next pass at them without opening the menu.
   const selected = controlledPlayer();
   if (selected
       && clicked.id !== selected.id
       && clicked.team === selected.team
       && state?.frame?.ball?.holder === selected.id
       && setPassTarget(clicked.id)) {
+    closePlayerMenu();
     return;
   }
-  if (selected?.id === clicked.id) {
-    statusEl.textContent = "controller active";
-    render();
-    return;
-  }
-  await assignSlot(activeSlot, clicked.id);
+  // Otherwise open the player menu (jersey #, formation position, keyboard control).
+  openPlayerMenu(clicked, e.clientX, e.clientY);
 }
 function handlePitchHover(e) {
   if (coachDrag) return;
@@ -5621,6 +5882,16 @@ canvas.addEventListener("mouseleave", () => {
     hoverPlayerId = null;
     render();
   }
+});
+// Dismiss the player menu when clicking elsewhere (the canvas click handler manages
+// its own open/close) or pressing Escape.
+document.addEventListener("pointerdown", e => {
+  if (!playerMenuEl || playerMenuEl.hidden) return;
+  if (e.target === canvas || playerMenuEl.contains(e.target)) return;
+  closePlayerMenu();
+});
+window.addEventListener("keydown", e => {
+  if (e.key === "Escape" && playerMenuEl && !playerMenuEl.hidden) closePlayerMenu();
 });
 surfacePreset.addEventListener("change", () => {
   const preset = SURFACE_PRESETS[surfacePreset.value];
