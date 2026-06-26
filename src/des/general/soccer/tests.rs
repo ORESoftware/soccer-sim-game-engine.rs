@@ -78315,7 +78315,7 @@ fn audit_defender_goalside_in_lane() {
                 }
                 let lane_dev = (p.position.x - p.home_position.x).abs();
                 // own-goal depth of the defender (how deep he is)
-                let own_goal_y = defending.other().goal_y(m.field_length);
+                let own_goal_y = defending.other().goal_y(snap.field_length);
                 let depth = (p.position.y - own_goal_y).abs();
                 if lane_dev <= LANE_TOL {
                     acc.viol_in_lane += 1;
