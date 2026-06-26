@@ -3443,6 +3443,34 @@ function interpolatedFrame(prev, target, t) {
   };
 }
 
+// The engine's ball.holder is a frame-tight "attached this exact tick" flag: it
+// is deliberately set to None on every dribble knock / first-touch while the ball
+// briefly travels off the foot, which made the cyan possession ring flicker. Latch
+// the ring to the last holder and only release it when the ball is genuinely gone:
+// handed to someone else (turnover/teammate), lofted into flight, passed, or rolled
+// more than ~2yd away. Matches the engine's own sticky tracking-holder inference.
+const DISPLAY_HOLDER_RELEASE_YARDS = 2.0;
+let lastDisplayHolder = null;
+function displayHolderId(frame) {
+  const raw = frame?.ball?.holder;
+  if (raw != null) { lastDisplayHolder = raw; return raw; } // attached → trust it (covers turnovers)
+  const prev = lastDisplayHolder;
+  if (prev == null) return null;
+  // Passed/shot/lofted → ball is in flight, drop the ring.
+  if (pendingPassPhase(frame) || ballAltitudeYards(frame?.ball) > 0.5) {
+    lastDisplayHolder = null;
+    return null;
+  }
+  const p = (frame?.players || []).find(pl => Number(pl.id) === Number(prev));
+  const bp = frame?.ball?.position;
+  if (!p || !bp) { lastDisplayHolder = null; return null; }
+  const d = Math.hypot(
+    Number(p.position?.x || 0) - Number(bp.x || 0),
+    Number(p.position?.y || 0) - Number(bp.y || 0),
+  );
+  if (d > DISPLAY_HOLDER_RELEASE_YARDS) { lastDisplayHolder = null; return null; }
+  return prev; // ball still at his feet through the touch — keep the ring lit
+}
 function drawField(frame, r) {
   drawPitch(r);
   drawPitchGridOverlay(r);
@@ -3455,7 +3483,8 @@ function drawField(frame, r) {
   drawSelectedVision(inspectedPlayer(), r);
   drawDecisionIntentTraces(r);
   for (const o of frame.officials || []) drawOfficial(o, r);
-  for (const p of frame.players || []) drawPlayer(p, r, frame.ball?.holder);
+  const ringHolderId = displayHolderId(frame);
+  for (const p of frame.players || []) drawPlayer(p, r, ringHolderId);
   if (frame.ball) drawBall(frame.ball, r);
   drawCoachHintMarkers(r);
   drawCoachHintDrag(r);
