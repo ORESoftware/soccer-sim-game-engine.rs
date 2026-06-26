@@ -40779,6 +40779,47 @@ fn offside_geometry_uses_ball_second_last_defender_and_halfway_line() {
     assert_eq!(json["offsidePlayerY"], 108.0);
 }
 
+// Empirical, full-match proof of the law: a player can never be offside in their
+// own half, so no "offside" event the referee emits over real play may flag a
+// receiver whose frozen pass-time position sits in their own half.
+#[test]
+fn no_offside_event_is_ever_flagged_against_a_receiver_in_their_own_half() {
+    let mut total_offsides = 0usize;
+    for seed in 0..10u32 {
+        let mut sim = SoccerMatch::default_11v11(MatchConfig {
+            seed,
+            ..Default::default()
+        });
+        let half = sim.config.field_length_yards * 0.5;
+        for _ in 0..4000 {
+            sim.run_time_step();
+        }
+        for event in sim.events.iter().filter(|e| e.kind == "offside") {
+            total_offsides += 1;
+            let team = event.team.expect("offside event carries the flagged team");
+            let y = event
+                .offside_player_y
+                .expect("offside event carries the flagged player y");
+            match team {
+                Team::Home => assert!(
+                    y > half,
+                    "Home flagged offside in its OWN half: y={y} half={half} (seed {seed})"
+                ),
+                Team::Away => assert!(
+                    y < half,
+                    "Away flagged offside in its OWN half: y={y} half={half} (seed {seed})"
+                ),
+            }
+        }
+    }
+    // Make sure the matches actually produced offside decisions, otherwise the
+    // assertion above would pass vacuously.
+    assert!(
+        total_offsides > 0,
+        "no offside events were generated across the sampled matches"
+    );
+}
+
 #[test]
 fn ball_holder_dribble_target_beyond_line_is_not_self_offside() {
     let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
