@@ -12041,9 +12041,10 @@ pub fn match_outcome_reward_enabled() -> bool {
     {
         use std::sync::OnceLock;
         static ENABLED: OnceLock<bool> = OnceLock::new();
+        // Promoted to default-ON in production (terminal won-game reward; training-time only).
         *ENABLED.get_or_init(|| {
             dd_soccer_enable_outcome_credit()
-                || soccer_env_flag_enabled(DD_SOCCER_MATCH_OUTCOME_REWARD_ENV)
+                || gate_default_on(DD_SOCCER_MATCH_OUTCOME_REWARD_ENV)
         })
     }
 }
@@ -17695,15 +17696,42 @@ pub(crate) fn is_outside_mid_attack_strategy(strategy: TeamAttackStrategy) -> bo
     )
 }
 
+/// Resolve a feature gate that has been promoted to **default-ON in production**.
+///
+/// In `#[cfg(test)]` builds the gate stays default-OFF and purely env-driven (each gate's
+/// own test branch keeps its original reader), so the byte-identical parity suite is
+/// unchanged. Production callers feed this into their own `OnceLock`: the gate is ON unless
+/// the operator explicitly sets the env var to a falsey value (`0` / `false` / `no` /
+/// `off`) — the kill switch. Empty / any other value ⇒ ON.
+pub(crate) fn gate_default_on(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(raw) => !matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
 /// Master gate for the "outside mid attack defender" attacking play. When set, the team-strategy
 /// heuristic proposes [`TeamAttackStrategy::OutsideMidAttackDefenderLeft`]/`Right` for a wide
 /// carrier driving the flank in the opponent half. Unset (default) the strategy is never proposed,
 /// so play is byte-identical to baseline. The learner and `SOCCER_FORCE_ATTACK_STRATEGY` can still
 /// select the strategy regardless of this flag (for training / live demos).
+/// Promoted to default-ON in production (low-risk behavioral hardening).
 pub(crate) fn dd_soccer_enable_outside_mid_attack_defender() -> bool {
-    use std::sync::OnceLock;
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_OUTSIDE_MID_ATTACK_DEFENDER").is_ok())
+    #[cfg(test)]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_OUTSIDE_MID_ATTACK_DEFENDER").is_ok())
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| gate_default_on("DD_SOCCER_ENABLE_OUTSIDE_MID_ATTACK_DEFENDER"))
+    }
 }
 
 /// Gate for aerial-pass-out-of-bounds discipline. OFF (the default) ⇒ no extra penalty event,
@@ -17712,9 +17740,18 @@ pub(crate) fn dd_soccer_enable_outside_mid_attack_defender() -> bool {
 /// all three (MDP reward + POMDP observation + MPC execution) so the policy learns to stop
 /// blazing long lofts out of play. See [`AERIAL_PASS_OOB_MIN_DISTANCE_YARDS`] and friends.
 pub(crate) fn dd_soccer_enable_aerial_pass_oob_discipline() -> bool {
-    use std::sync::OnceLock;
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_AERIAL_PASS_OOB_DISCIPLINE").is_ok())
+    #[cfg(test)]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_AERIAL_PASS_OOB_DISCIPLINE").is_ok())
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| gate_default_on("DD_SOCCER_ENABLE_AERIAL_PASS_OOB_DISCIPLINE"))
+    }
 }
 
 /// Gate for overload-weighted progression rewards (see the `OVERLOAD_*` constants). OFF (the
@@ -49954,9 +49991,18 @@ fn xavi_turn_enabled(config: &MatchConfig) -> bool {
 }
 
 fn dd_soccer_enable_obstacle_aware_intercept() -> bool {
-    use std::sync::OnceLock;
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_OBSTACLE_AWARE_INTERCEPT").is_ok())
+    #[cfg(test)]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_OBSTACLE_AWARE_INTERCEPT").is_ok())
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| gate_default_on("DD_SOCCER_ENABLE_OBSTACLE_AWARE_INTERCEPT"))
+    }
 }
 
 /// Whether obstacle-aware loose-ball intercept feasibility is live for this match: OFF unless the

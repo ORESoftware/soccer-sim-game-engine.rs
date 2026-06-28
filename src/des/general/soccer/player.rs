@@ -2458,9 +2458,18 @@ const DECISION_REFRACTORY_WINDOW_TICKS: u64 = 7;
 /// momentum). The new `PlayerAgent` continuity fields stay empty while disabled, so serialized
 /// snapshots are unchanged too.
 pub(crate) fn decision_refractory_enabled() -> bool {
-    use std::sync::OnceLock;
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_DECISION_REFRACTORY").is_ok())
+    #[cfg(test)]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| std::env::var("DD_SOCCER_ENABLE_DECISION_REFRACTORY").is_ok())
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static V: OnceLock<bool> = OnceLock::new();
+        *V.get_or_init(|| gate_default_on("DD_SOCCER_ENABLE_DECISION_REFRACTORY"))
+    }
 }
 
 /// True when the refractory forbids committing a changed decision at tick `now`, given the ticks
