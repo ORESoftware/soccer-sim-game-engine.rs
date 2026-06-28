@@ -16605,6 +16605,12 @@ pub struct WorldSnapshot {
     /// Empty for synthetic/tracking snapshots and before a player has made a decision.
     #[serde(skip)]
     pub(crate) player_tick_carryover: HashMap<usize, SoccerPlayerTickCarryover>,
+    /// The most recent player to touch the ball (mirrors `SoccerMatch::last_touch_player`),
+    /// copied in at snapshot build. Used to recognise a carrier through the brief dribble
+    /// knock-on window where the ball is momentarily loose but still theirs — see
+    /// [`Self::dribble_carrier_offside_exempt`]. `None` on synthetic/tracking snapshots.
+    #[serde(default)]
+    pub(crate) last_touch_player: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16957,6 +16963,59 @@ pub(crate) fn dd_soccer_disable_onside_support_hold() -> bool {
     use std::sync::OnceLock;
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("DD_SOCCER_DISABLE_ONSIDE_SUPPORT_HOLD").is_ok())
+}
+/// Default learnable weight on the shot-window uplift a carrier earns by getting beyond the
+/// second-last defender (see [`dd_soccer_dribble_past_line_shot_gain_weight`]).
+pub(crate) const DRIBBLE_PAST_LINE_SHOT_GAIN_WEIGHT_DEFAULT: f64 = 4.5;
+/// Default learnable weight on raw penetration depth in yards beyond the line
+/// (see [`dd_soccer_dribble_past_line_depth_weight`]).
+pub(crate) const DRIBBLE_PAST_LINE_DEPTH_WEIGHT_DEFAULT: f64 = 0.16;
+/// Penetration depth beyond the line is rewarded only up to this many yards in behind — past
+/// it the carrier is effectively through on goal and the shot-window term carries the value.
+pub(crate) const DRIBBLE_PAST_LINE_MAX_DEPTH_YARDS: f64 = 12.0;
+
+/// Law 11: a player can NEVER be in an offside position off their own touch. A carrier who
+/// dribbles past the back four carries the ball with them, so a candidate carry-target "ahead
+/// of the ball" that the geometric offside test would flag is a stale comparison against the
+/// ball's LAGGING position during the knock-on window — the carrier's own dribble value was
+/// wrongly penalised as offside, so the AI refused to run past the last line. With this
+/// (default ON) the effective carrier is exempt from offside in their own dribble-target value
+/// and a learnable MDP/POMDP "beyond-the-line" shot-gain term rewards penetrating the back
+/// four toward goal (discounted by a belief over keeping the ball). Set this env var to restore
+/// the old behaviour (carrier offside penalty applies the instant the ball is knocked loose,
+/// and no penetration bonus) — byte-identical to before.
+pub(crate) fn dd_soccer_disable_dribble_past_back_line() -> bool {
+    use std::sync::OnceLock;
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("DD_SOCCER_DISABLE_DRIBBLE_PAST_BACK_LINE").is_ok())
+}
+/// Learnable weight on the carrier's shot-window UPLIFT earned by dribbling past the
+/// second-last defender (MDP value of the penetration). Operator/learner override via
+/// `DD_SOCCER_DRIBBLE_PAST_LINE_SHOT_GAIN_WEIGHT`.
+pub(crate) fn dd_soccer_dribble_past_line_shot_gain_weight() -> f64 {
+    use std::sync::OnceLock;
+    static V: OnceLock<f64> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("DD_SOCCER_DRIBBLE_PAST_LINE_SHOT_GAIN_WEIGHT")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<f64>().ok())
+            .filter(|w| w.is_finite() && *w >= 0.0)
+            .unwrap_or(DRIBBLE_PAST_LINE_SHOT_GAIN_WEIGHT_DEFAULT)
+    })
+}
+/// Learnable weight on raw penetration DEPTH beyond the line (yards in behind), so the carrier
+/// keeps driving even where the marginal shot-window uplift has flattened near goal. Operator/
+/// learner override via `DD_SOCCER_DRIBBLE_PAST_LINE_DEPTH_WEIGHT`.
+pub(crate) fn dd_soccer_dribble_past_line_depth_weight() -> f64 {
+    use std::sync::OnceLock;
+    static V: OnceLock<f64> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("DD_SOCCER_DRIBBLE_PAST_LINE_DEPTH_WEIGHT")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<f64>().ok())
+            .filter(|w| w.is_finite() && *w >= 0.0)
+            .unwrap_or(DRIBBLE_PAST_LINE_DEPTH_WEIGHT_DEFAULT)
+    })
 }
 /// Tactical model-based look-ahead depth for the value blend (`neural_blended_action`):
 /// AlphaZero/MuZero-style planning that rolls the learned world model (`predict_next`)
@@ -17739,6 +17798,7 @@ impl WorldSnapshot {
 
         WorldSnapshot {
             tick: m.tick,
+            last_touch_player: m.last_touch_player,
             ranked_floor_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
             ranked_aerial_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
             home_genome: m.home_genome.clone(),
@@ -32571,6 +32631,75 @@ impl WorldSnapshot {
         best.map(|(_, aim, v)| (aim, v))
     }
 
+    /// Whether `player_id` is the EFFECTIVE ball carrier for the purpose of offside in their own
+    /// dribble-target value — and so, by Law 11, can never be in an offside position off their own
+    /// touch. Always true for the strict holder (existing behaviour, ungated). When the
+    /// dribble-past-line feature is enabled (default) it ALSO covers the brief knock-on window
+    /// where the carrier has just played the ball, it is momentarily loose (no pass to a team-mate
+    /// in flight), and they are the player committed to running it down — i.e. they are still
+    /// carrying it. Off-ball team-mates are never exempt here.
+    pub(crate) fn dribble_carrier_offside_exempt(&self, player_id: usize) -> bool {
+        if self.ball.holder == Some(player_id) {
+            return true;
+        }
+        if dd_soccer_disable_dribble_past_back_line() {
+            return false;
+        }
+        self.ball.holder.is_none()
+            && self.pending_pass.is_none()
+            && self.last_touch_player == Some(player_id)
+            && self.is_committed_loose_ball_chaser(player_id)
+    }
+
+    /// POMDP belief that the carrier KEEPS the ball through a carry to `candidate`: more open
+    /// grass at the destination and a better dribbler → higher retention. Bounded (0,1] so it
+    /// only ever DISCOUNTS the penetration value, never inverts it.
+    fn carry_retain_belief(&self, player: &PlayerSnapshot, candidate: Vec2) -> f64 {
+        let nearest = self.nearest_opponent_distance_at(player.team, candidate);
+        let space = (nearest / 6.0).clamp(0.0, 1.0);
+        let dribbling = ability01(player.skills.dribbling);
+        (0.28 + 0.52 * space + 0.24 * dribbling).clamp(0.05, 1.0)
+    }
+
+    /// MDP value of a carrier DRIBBLING beyond the second-last defender toward goal. Rewards only
+    /// NEW penetration (candidate further in behind than the carrier already is), scaled by the
+    /// shot-window uplift it unlocks and the raw depth gained, each discounted by the POMDP
+    /// retention belief. Zero for non-carriers, when offside-exempt would not apply, when the
+    /// feature is disabled, or when the candidate is not actually past the line — so it can only
+    /// pull the carry forward into space the laws already allow.
+    pub(crate) fn carrier_beyond_line_shot_gain(
+        &self,
+        player_id: usize,
+        player: &PlayerSnapshot,
+        candidate: Vec2,
+        current: Vec2,
+    ) -> f64 {
+        if dd_soccer_disable_dribble_past_back_line()
+            || !self.dribble_carrier_offside_exempt(player_id)
+        {
+            return 0.0;
+        }
+        let Some(line_y) = self.second_last_defender_line_for(player.team) else {
+            return 0.0;
+        };
+        let dir = player.team.attack_dir();
+        let beyond = (candidate.y - line_y) * dir;
+        let current_beyond = (current.y - line_y) * dir;
+        // Only value genuinely going PAST the line, and only the additional penetration.
+        if beyond <= 0.0 || beyond <= current_beyond {
+            return 0.0;
+        }
+        let depth = (beyond - current_beyond).clamp(0.0, DRIBBLE_PAST_LINE_MAX_DEPTH_YARDS);
+        let shot_gain =
+            (self.shooting_window_score_at(player, candidate)
+                - self.shooting_window_score_at(player, current))
+            .max(0.0);
+        let retain = self.carry_retain_belief(player, candidate);
+        (dd_soccer_dribble_past_line_shot_gain_weight() * shot_gain
+            + dd_soccer_dribble_past_line_depth_weight() * depth)
+            * retain
+    }
+
     fn shot_creation_score_for(
         &self,
         player_id: usize,
@@ -32586,13 +32715,15 @@ impl WorldSnapshot {
         } else {
             -0.72
         };
-        let offside_penalty = if self.ball.holder != Some(player_id)
+        let offside_penalty = if !self.dribble_carrier_offside_exempt(player_id)
             && self.position_would_be_offside(player.team, candidate)
         {
             12.0
         } else {
             0.0
         };
+        let beyond_line_gain =
+            self.carrier_beyond_line_shot_gain(player_id, player, candidate, current);
         let centrality = (1.0
             - ((candidate.x - self.field_width * 0.5).abs() / (self.field_width * 0.5)))
             .clamp(0.0, 1.0);
@@ -32604,6 +32735,7 @@ impl WorldSnapshot {
             - candidate.distance(current) * 0.022
             - candidate.distance(home) * 0.006
             - offside_penalty
+            + beyond_line_gain
     }
 
     pub(crate) fn shooting_window_score_at(&self, player: &PlayerSnapshot, position: Vec2) -> f64 {

@@ -42368,6 +42368,7 @@ fn tracking_frame_to_world_snapshot(
     let score_diff_home = score_home as i32 - score_away as i32;
     WorldSnapshot {
         tick: frame.tick,
+        last_touch_player: None,
         ranked_floor_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         ranked_aerial_pass_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         home_genome: crate::des::general::soccer_genome::SoccerTeamGenome::default(),

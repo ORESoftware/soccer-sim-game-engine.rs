@@ -74169,3 +74169,139 @@ fn neural_snapshot_carries_progress_so_loaded_net_is_warm() {
         "loaded net must restore training progress so the value blend treats it as warm"
     );
 }
+
+// A ball-carrier dribbling past the back four carries the ball with them, so by Law 11 they can
+// never be in an offside position off their own touch. Build a Home carrier (attacks +y) sitting
+// just behind a deep Away block, with a candidate carry-target beyond the second-last defender.
+fn dribble_past_line_setup() -> SoccerMatch {
+    let mut sim = SoccerMatch::default_11v11(MatchConfig::default());
+    let home_ids: Vec<usize> = sim
+        .players
+        .iter()
+        .filter(|p| p.team == Team::Home)
+        .map(|p| p.id)
+        .collect();
+    let away_ids: Vec<usize> = sim
+        .players
+        .iter()
+        .filter(|p| p.team == Team::Away)
+        .map(|p| p.id)
+        .collect();
+    // Carrier on the ball, central, two yards behind the Away block line.
+    let carrier = home_ids[0];
+    sim.players[carrier].position = Vec2::new(40.0, 74.0);
+    // Rest of Home tucked back so the carrier is unambiguously the relevant attacker.
+    for &id in home_ids.iter().skip(1) {
+        sim.players[id].position = Vec2::new(20.0, 30.0);
+    }
+    // Away keeper deep in front of their goal; the rest hold a flat block at y = 78, so the
+    // second-last defender line is 78 and a target at y > 78 is an offside position.
+    sim.players[away_ids[0]].position = Vec2::new(40.0, 118.0);
+    for &id in away_ids.iter().skip(1) {
+        sim.players[id].position = Vec2::new(20.0, 78.0);
+    }
+    sim.ball.position = sim.players[carrier].position;
+    sim.ball.holder = Some(carrier);
+    sim.last_touch_player = Some(carrier);
+    sim.ball.velocity = Vec2::new(0.0, 0.0);
+    sim.ball.altitude_yards = 0.0;
+    sim
+}
+
+#[test]
+fn carrier_is_exempt_from_offside_off_their_own_touch() {
+    let mut sim = dribble_past_line_setup();
+    let carrier = WorldSnapshot::from_match(&sim)
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.id == sim.ball.holder.unwrap())
+        .map(|p| p.id)
+        .expect("carrier present");
+
+    // A point two yards beyond the second-last defender IS an offside position by geometry.
+    let beyond = Vec2::new(40.0, 88.0);
+    let snapshot = WorldSnapshot::from_match(&sim);
+    assert!(
+        snapshot.position_would_be_offside(Team::Home, beyond),
+        "a point past the second-last defender is an offside position"
+    );
+
+    // The holder is exempt — they carry the ball, so they cannot be offside off their own touch.
+    assert!(
+        snapshot.dribble_carrier_offside_exempt(carrier),
+        "the strict holder is always offside-exempt for their own dribble value"
+    );
+
+    // The exemption survives the knock-on window: ball momentarily loose, just played by the
+    // carrier, no pass to a team-mate, and the carrier is the committed chaser of their own touch.
+    sim.ball.holder = None;
+    sim.last_touch_player = Some(carrier);
+    sim.pending_pass = None;
+    let loose = WorldSnapshot::from_match(&sim);
+    assert!(
+        loose.is_committed_loose_ball_chaser(carrier),
+        "carrier should be the committed chaser of its own knocked-on ball"
+    );
+    assert!(
+        loose.dribble_carrier_offside_exempt(carrier),
+        "carrier stays offside-exempt through the dribble knock-on window"
+    );
+
+    // An off-ball team-mate parked in the same offside position is NOT exempt.
+    let mate = loose
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.id != carrier)
+        .map(|p| p.id)
+        .expect("a team-mate exists");
+    assert!(
+        !loose.dribble_carrier_offside_exempt(mate),
+        "an off-ball team-mate is never carrier-exempt from offside"
+    );
+}
+
+#[test]
+fn carrier_values_dribbling_beyond_the_back_line() {
+    let sim = dribble_past_line_setup();
+    let snapshot = WorldSnapshot::from_match(&sim);
+    let carrier = sim.ball.holder.unwrap();
+    let carrier_snap = snapshot
+        .players
+        .iter()
+        .find(|p| p.id == carrier)
+        .expect("carrier snapshot")
+        .clone();
+    let current = carrier_snap.position;
+    let beyond = Vec2::new(40.0, 88.0); // past the line, toward goal
+
+    // The MDP/POMDP penetration term rewards the carrier for going beyond the line into a better
+    // shooting position; it is strictly positive here.
+    let gain = snapshot.carrier_beyond_line_shot_gain(carrier, &carrier_snap, beyond, current);
+    assert!(
+        gain > 0.0,
+        "carrier should value dribbling beyond the back four toward goal: gain={gain}"
+    );
+
+    // The same destination earns NO penetration value for a non-carrier team-mate — only the
+    // player actually carrying the ball is rewarded for breaking the line.
+    let mate_snap = snapshot
+        .players
+        .iter()
+        .find(|p| p.team == Team::Home && p.id != carrier)
+        .expect("team-mate snapshot")
+        .clone();
+    let mate_gain =
+        snapshot.carrier_beyond_line_shot_gain(mate_snap.id, &mate_snap, beyond, mate_snap.position);
+    assert_eq!(
+        mate_gain, 0.0,
+        "an off-ball team-mate earns no carry-past-line value"
+    );
+
+    // Behaviourally the carrier's chosen shot-creation space now drives FORWARD past the line
+    // rather than being pulled back onside by a spurious offside penalty.
+    let target = snapshot.shot_creation_space_for(carrier, current);
+    assert!(
+        target.y >= current.y - 0.5,
+        "carrier should not be pulled back behind the line: target={target:?}, current={current:?}"
+    );
+}
