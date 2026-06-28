@@ -148,6 +148,13 @@ fn main() {
     let dt = 0.1f64; // 10 Hz contract; refined from clock below if available.
     let mut dt_seen = dt;
 
+    // During settled-unpossessed ticks: how hard is the NEAREST player actually
+    // closing? Weak closing = ball drifts uncontested though someone is "en route".
+    let mut unposs_ticks: u64 = 0;
+    let mut unposs_sum_closing: f64 = 0.0;
+    let mut unposs_weak_closing_ticks: u64 = 0; // nearest closing < 3 yps
+    let mut unposs_negative_closing_ticks: u64 = 0; // nearest moving AWAY
+
     let mut home_fail = StreakStats::default();
     let mut away_fail = StreakStats::default();
     let mut ball_idle = StreakStats::default(); // BOTH teams failing at once
@@ -225,7 +232,29 @@ fn main() {
             home_fail.tick(home_failing, dt_seen, home_min, ball_speed);
             away_fail.tick(away_failing, dt_seen, away_min, ball_speed);
             ball_idle.tick(ball_fully_idle, dt_seen, nearest, ball_speed);
-            settled_unpossessed.tick(settled && nearest > NEAR_RADIUS_YARDS, dt_seen, nearest, ball_speed);
+            let is_unpossessed = settled && nearest > NEAR_RADIUS_YARDS;
+            settled_unpossessed.tick(is_unpossessed, dt_seen, nearest, ball_speed);
+            if is_unpossessed {
+                // Closing speed of the strict-nearest non-GK player (toward the ball).
+                let mut best_dist = f64::INFINITY;
+                let mut best_closing = 0.0;
+                for p in frame.players.iter().filter(|p| p.role != PlayerRole::Goalkeeper) {
+                    let to_ball = ball_pos - p.position;
+                    let d = to_ball.len();
+                    if d < best_dist && d > 1e-3 {
+                        best_dist = d;
+                        best_closing = p.velocity.dot(to_ball * (1.0 / d));
+                    }
+                }
+                unposs_ticks += 1;
+                unposs_sum_closing += best_closing;
+                if best_closing < 3.0 {
+                    unposs_weak_closing_ticks += 1;
+                }
+                if best_closing < 0.0 {
+                    unposs_negative_closing_ticks += 1;
+                }
+            }
         }
         // Close any open streaks at match end.
         home_fail.close(dt_seen);
@@ -256,7 +285,20 @@ fn main() {
     ball_idle.report("BALL FULLY IDLE (settled; both teams failing to contest)", dt_seen, settled_loose_ticks);
     home_fail.report("HOME failing to contest a settled ball", dt_seen, settled_loose_ticks);
     away_fail.report("AWAY failing to contest a settled ball", dt_seen, settled_loose_ticks);
+    if unposs_ticks > 0 {
+        println!(
+            "\n--- NEAREST PLAYER's CLOSING during settled-unpossessed ticks ---"
+        );
+        println!(
+            "  mean closing speed: {:.2} yps   weak (<3 yps): {} ({:.1}%)   moving AWAY: {} ({:.1}%)",
+            unposs_sum_closing / unposs_ticks as f64,
+            unposs_weak_closing_ticks,
+            100.0 * unposs_weak_closing_ticks as f64 / unposs_ticks as f64,
+            unposs_negative_closing_ticks,
+            100.0 * unposs_negative_closing_ticks as f64 / unposs_ticks as f64,
+        );
+    }
     println!(
-        "\n(Episodes >=2s in 'BALL FULLY IDLE' = the gap: a SETTLED loose ball neither team\n commits to. Large mean nearest-body distance = the 'open-space ball nobody chases' case.)"
+        "\n(Long 'SETTLED BALL UNPOSSESSED' streaks + LOW mean closing = the real gap: a settled\n ball sits while the nearest player ambles over instead of committing to win it.)"
     );
 }
