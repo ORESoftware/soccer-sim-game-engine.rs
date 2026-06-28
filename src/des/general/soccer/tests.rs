@@ -7866,6 +7866,164 @@ fn completed_first_time_ground_pass_learns_short_upfield_open_bonus() {
 }
 
 #[test]
+fn quick_release_speed_fit_rewards_fast_release_and_decays_with_dwell() {
+    // A strict one-touch is always full value regardless of nominal hold.
+    assert!((quick_release_speed_fit(true, 9.9) - 1.0).abs() < 1e-9);
+    // A sharp set-and-pass (within the sharp-hold window) is still full value.
+    assert!((quick_release_speed_fit(false, 0.0) - 1.0).abs() < 1e-9);
+    assert!((quick_release_speed_fit(false, QUICK_RELEASE_SHARP_HOLD_SECONDS) - 1.0).abs() < 1e-9);
+    // Past the sharp window it decays monotonically...
+    let mid = quick_release_speed_fit(false, 0.9);
+    assert!(mid > 0.0 && mid < 1.0, "mid-dwell fit should be partial: {mid}");
+    assert!(quick_release_speed_fit(false, 1.2) < mid);
+    // ...reaching zero once the carrier has dwelled the full window (over-thought it).
+    assert_eq!(quick_release_speed_fit(false, QUICK_RELEASE_DWELL_SECONDS), 0.0);
+    assert_eq!(quick_release_speed_fit(false, 5.0), 0.0);
+}
+
+#[test]
+fn quick_release_reward_pays_open_forward_ball_more_when_released_fast() {
+    let origin = Vec2::new(40.0, 50.0);
+    let forward = Vec2::new(41.0, 57.0); // ~7yd upfield, open advanced teammate
+    let open = 0.85;
+
+    let one_touch = quick_release_forward_pass_reward_inner(
+        Team::Home,
+        PassFlight::Floor,
+        false,
+        true, // one-touch
+        0.0,
+        origin,
+        forward,
+        open,
+    );
+    let dwelled = quick_release_forward_pass_reward_inner(
+        Team::Home,
+        PassFlight::Floor,
+        false,
+        false,
+        1.2, // held the ball, deliberated
+        origin,
+        forward,
+        open,
+    );
+    assert!(
+        one_touch > 0.0,
+        "a quick one-touch open forward ball must earn the tempo bonus"
+    );
+    assert!(
+        one_touch > dwelled,
+        "releasing faster (one-touch) must out-reward dwelling on the ball: {one_touch} vs {dwelled}"
+    );
+
+    // A pass into a marked man, a backward/lateral ball, a cross, or an aerial ball does
+    // not qualify — the bonus is for releasing an OPEN FORWARD option fast.
+    let marked = quick_release_forward_pass_reward_inner(
+        Team::Home,
+        PassFlight::Floor,
+        false,
+        true,
+        0.0,
+        origin,
+        forward,
+        0.10,
+    );
+    let backward = quick_release_forward_pass_reward_inner(
+        Team::Home,
+        PassFlight::Floor,
+        false,
+        true,
+        0.0,
+        origin,
+        Vec2::new(41.0, 44.0),
+        open,
+    );
+    let cross = quick_release_forward_pass_reward_inner(
+        Team::Home,
+        PassFlight::Floor,
+        true,
+        true,
+        0.0,
+        origin,
+        forward,
+        open,
+    );
+    let aerial = quick_release_forward_pass_reward_inner(
+        Team::Home,
+        PassFlight::Aerial,
+        false,
+        true,
+        0.0,
+        origin,
+        forward,
+        open,
+    );
+    assert_eq!(marked, 0.0);
+    assert_eq!(backward, 0.0);
+    assert_eq!(cross, 0.0);
+    assert_eq!(aerial, 0.0);
+
+    // Never exceeds the hard ceiling.
+    assert!(one_touch <= QUICK_RELEASE_PASS_MAX_POINTS);
+}
+
+#[test]
+fn quick_release_reward_is_gated_off_by_default() {
+    // The public wrapper consults the env gate; unset (default) ⇒ byte-identical 0.
+    let origin = Vec2::new(40.0, 50.0);
+    let forward = Vec2::new(41.0, 57.0);
+    assert!(!quick_release_pass_reward_enabled());
+    let gated = quick_release_forward_pass_reward_from_parts(
+        Team::Home,
+        PassFlight::Floor,
+        false,
+        true,
+        0.0,
+        origin,
+        forward,
+        0.85,
+    );
+    assert_eq!(gated, 0.0, "gate off ⇒ no quick-release reward");
+}
+
+#[test]
+fn quick_release_open_forward_lift_is_neutral_when_gated_off() {
+    // Gate off (default) ⇒ no lift regardless of how open the forward option is.
+    assert!(!quick_release_pass_bias_enabled());
+    assert_eq!(quick_release_open_forward_pass_lift(0.95, 2.0), 1.0);
+    assert_eq!(quick_release_open_forward_pass_lift(0.0, 0.0), 1.0);
+}
+
+#[test]
+fn quick_release_open_forward_lift_math_escalates_with_openness_and_dwell() {
+    // Exercise the gate-free math by computing the expected value directly from the same
+    // constants (so this does not depend on the process-global env gate).
+    fn expected(forward_open: f64, hold: f64) -> f64 {
+        let forward_open = forward_open.clamp(0.0, 1.0);
+        if forward_open < QUICK_RELEASE_BIAS_MIN_OPENNESS {
+            return 1.0;
+        }
+        let openness_fit = ((forward_open - QUICK_RELEASE_BIAS_MIN_OPENNESS)
+            / (1.0 - QUICK_RELEASE_BIAS_MIN_OPENNESS))
+            .clamp(0.0, 1.0);
+        let dwell_fit = (hold.max(0.0) / QUICK_RELEASE_BIAS_DWELL_REFERENCE_SECONDS).clamp(0.0, 1.0);
+        let escalation = QUICK_RELEASE_BIAS_IMMEDIATE_FLOOR
+            + (1.0 - QUICK_RELEASE_BIAS_IMMEDIATE_FLOOR) * dwell_fit;
+        1.0 + QUICK_RELEASE_BIAS_PASS_LIFT * openness_fit * escalation
+    }
+    // Below the openness floor ⇒ neutral.
+    assert!((expected(0.30, 1.0) - 1.0).abs() < 1e-12);
+    // A wide-open forward man already lifts on reception (one-touch), and lifts MORE the
+    // longer the carrier dwells.
+    let on_reception = expected(0.95, 0.0);
+    let dwelled = expected(0.95, 1.2);
+    assert!(on_reception > 1.0, "open forward ball should lift even one-touch: {on_reception}");
+    assert!(dwelled > on_reception, "dwelling should escalate the push to release: {dwelled} vs {on_reception}");
+    // More open ⇒ bigger lift at the same dwell.
+    assert!(expected(0.95, 0.6) > expected(0.60, 0.6));
+}
+
+#[test]
 fn quick_forward_pass_band_fit_peaks_in_five_to_eight_metre_band() {
     // Full value across the ≈5–8 m sweet spot (5.47–8.75 yd) and at both edges.
     assert!((quick_forward_pass_band_fit(7.0) - 1.0).abs() < 1e-9);

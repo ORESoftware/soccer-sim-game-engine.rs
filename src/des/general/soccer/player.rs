@@ -4690,10 +4690,18 @@ impl PlayerAgent {
             } else {
                 1.0
             };
+            // Non-learned "pass already!" lift: when an OPEN FORWARD teammate is on, push the
+            // carrier to release rather than dwell — escalates the longer they hold the ball.
+            // Gated; 1.0 (byte-identical) by default. Complements the learned tempo reward.
+            let quick_release_open_forward_lift = quick_release_open_forward_pass_lift(
+                observation.best_forward_pass_receiver_openness,
+                observation.actual_time_on_ball_seconds,
+            );
             let pass_score = (self.preferences.pass_bias
                 * directive.pass_priority
                 * (0.70 + passing * 0.42)
                 * (1.0 + quick_release * 0.22)
+                * quick_release_open_forward_lift
                 * completion_bonus
                 * (1.0 + observation.pass_curl_probability * 0.055)
                 * near_goal_pass_multiplier
@@ -4707,7 +4715,15 @@ impl PlayerAgent {
                 * pressured_release_multiplier
                 * panic_pass_damp
                 * rank_weight)
-                .clamp(0.004, hold_release_score_cap);
+                // The open-forward release may edge ABOVE the generic hold/release cap so the
+                // bias is not clamped away when an open forward ball is on — but only at HALF
+                // the lift, so a quick pass can out-rank dribble/hold without overtaking a
+                // genuine shot (a full cap-lift produced sterile keep-ball in headless A/B).
+                // Lift is 1.0 when the gate is off ⇒ cap unchanged (byte-identical).
+                .clamp(
+                    0.004,
+                    hold_release_score_cap * (1.0 + (quick_release_open_forward_lift - 1.0) * 0.5),
+                );
             options.push(AgentActionOptionTrace::new(
                 format!("pass{}", rank + 1),
                 pass_score,

@@ -1170,6 +1170,56 @@ const FIRST_TIME_SHORT_FORWARD_PASS_MIN_PROGRESS_YARDS: f64 = 1.25;
 const FIRST_TIME_SHORT_FORWARD_PASS_MIN_YARDS: f64 = 5.47;
 const FIRST_TIME_SHORT_FORWARD_PASS_IDEAL_MAX_YARDS: f64 = 8.75;
 const FIRST_TIME_SHORT_FORWARD_PASS_TAPER_YARDS: f64 = 8.0;
+// --- Quick-release forward-pass reward (the "pass already!" tempo bonus) ----------
+// Stacked, gated reward (`DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_REWARD`) that pays a
+// completed FORWARD floor pass to an OPEN, advanced teammate IN PROPORTION TO HOW
+// QUICKLY the carrier released it. The point is to stop the holder dwelling /
+// "overthinking who to pass to" when a progressive option is already open: the sooner
+// the ball is moved on, the heavier the reward, and a true ONE-TOUCH (first-time)
+// release gets a multiplier on top. It stacks on the existing per-pass / first-time
+// rewards rather than replacing them, and is byte-identical (0) when the gate is off.
+// Magnitudes are a starting point and MUST be validated through the promotion eval gate
+// (held-out Elo / win-rate), never tuned on raw reward.
+const QUICK_RELEASE_PASS_BASE_POINTS: f64 = 4.6;
+// One-touch (first-time) release multiplier on top of the base — a first-time forward
+// ball to an open man is the fastest possible release, so it is rewarded hardest.
+const QUICK_RELEASE_ONE_TOUCH_MULTIPLIER: f64 = 1.65;
+// The dwell window over which the multi-touch bonus decays to 0: a forward open pass
+// released within a fraction of a second keeps almost the full bonus; one made after
+// dwelling on the ball this long earns nothing extra (the holder over-thought it).
+const QUICK_RELEASE_DWELL_SECONDS: f64 = 1.5;
+// A forward open pass made within this hold time still counts as "quick" at full fit
+// even if it was not a strict first-time touch (a sharp set-and-pass).
+const QUICK_RELEASE_SHARP_HOLD_SECONDS: f64 = 0.35;
+// Minimum forward progress (yards, toward the attacking goal) for the receiver to count
+// as an "advanced" option worth a fast forward ball.
+const QUICK_RELEASE_MIN_FORWARD_YARDS: f64 = 1.5;
+// The receiver must be genuinely open for the "there IS an option, pass already" logic
+// to fire — below this openness the quick ball is a gamble, not a release of an opening.
+const QUICK_RELEASE_MIN_OPENNESS: f64 = 0.40;
+// Forward distance at which the progression component of the quality term saturates.
+const QUICK_RELEASE_FORWARD_REFERENCE_YARDS: f64 = 12.0;
+// Hard ceiling on the stacked bonus so it cannot dominate the goal reward.
+const QUICK_RELEASE_PASS_MAX_POINTS: f64 = 9.0;
+// --- Quick-release forward-pass DECISION bias (non-learned "pass already!") -------
+// Separate from the reward above: this is an immediate decision-time lift on the floor
+// pass option (no training required) for when an OPEN FORWARD teammate is already on —
+// it makes the carrier release rather than dwell. Gated `DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_BIAS`,
+// default OFF ⇒ pass scoring is byte-identical. The lift grows with how OPEN the best
+// forward option is and ESCALATES the longer the carrier has been on the ball, so dwelling
+// on an obvious forward ball is actively pushed toward releasing it.
+const QUICK_RELEASE_BIAS_MIN_OPENNESS: f64 = 0.45;
+// Max fractional lift on the floor pass score (e.g. 0.20 ⇒ up to +20%). Kept deliberately
+// modest: a headless A/B at +55% induced a one-touch frenzy (72% of on-ball decisions
+// one-touch, dwelling cut 4x but scoring collapsed 7-6 -> 1-0). +20% nudges the carrier to
+// release an open forward ball without strangling dribble/shoot or stopping finishing.
+const QUICK_RELEASE_BIAS_PASS_LIFT: f64 = 0.20;
+// Dwell (seconds on the ball) at which the escalation term saturates.
+const QUICK_RELEASE_BIAS_DWELL_REFERENCE_SECONDS: f64 = 1.2;
+// Floor on the escalation term so the lift still fires on early release (a true one-touch
+// ball to an open forward man) rather than only after dwelling, but weighted so the push
+// genuinely ESCALATES with dwell rather than slamming on at reception.
+const QUICK_RELEASE_BIAS_IMMEDIATE_FLOOR: f64 = 0.35;
 // A completed back pass KEEPS possession — it is far better than forcing a forward
 // ball into a turnover. It is only mildly discouraged (so the policy still prefers to
 // progress when it safely can), not punished, so the team learns to retain rather than
@@ -18905,6 +18955,158 @@ fn completed_first_time_forward_pass_reward_from_parts(
         * (0.48 + target_fit * 0.52)
 }
 
+/// Gate for the quick-release forward-pass tempo bonus
+/// ([`quick_release_forward_pass_reward_from_parts`]). Default OFF ⇒ the bonus is 0 and
+/// the reward stream is byte-identical; set `DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_REWARD`
+/// to teach the policy to move the ball on FAST when a forward option is already open.
+pub(crate) fn quick_release_pass_reward_enabled() -> bool {
+    #[cfg(test)]
+    {
+        soccer_env_flag_enabled("DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_REWARD")
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED
+            .get_or_init(|| soccer_env_flag_enabled("DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_REWARD"))
+    }
+}
+
+/// Gate for the non-learned quick-release DECISION bias ([`quick_release_open_forward_pass_lift`]).
+/// Default OFF ⇒ pass scoring is byte-identical; set `DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_BIAS`
+/// to make the carrier release an already-open forward ball immediately instead of dwelling.
+pub(crate) fn quick_release_pass_bias_enabled() -> bool {
+    #[cfg(test)]
+    {
+        soccer_env_flag_enabled("DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_BIAS")
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED
+            .get_or_init(|| soccer_env_flag_enabled("DD_SOCCER_ENABLE_QUICK_RELEASE_PASS_BIAS"))
+    }
+}
+
+/// Decision-time multiplier (≥ 1.0) applied to the floor pass option score when an OPEN
+/// FORWARD teammate is already available: the more open the forward option and the longer
+/// the carrier has dwelled on the ball, the stronger the push to release it now. Returns
+/// 1.0 (no change) when the gate is off or no sufficiently open forward option exists, so
+/// pass scoring is byte-identical by default. Pure / RNG-free; `forward_open` is
+/// `best_forward_pass_receiver_openness`, `hold_seconds` is `actual_time_on_ball_seconds`.
+pub(crate) fn quick_release_open_forward_pass_lift(forward_open: f64, hold_seconds: f64) -> f64 {
+    if !quick_release_pass_bias_enabled() {
+        return 1.0;
+    }
+    let forward_open = forward_open.clamp(0.0, 1.0);
+    if forward_open < QUICK_RELEASE_BIAS_MIN_OPENNESS {
+        return 1.0;
+    }
+    let openness_fit = ((forward_open - QUICK_RELEASE_BIAS_MIN_OPENNESS)
+        / (1.0 - QUICK_RELEASE_BIAS_MIN_OPENNESS))
+        .clamp(0.0, 1.0);
+    let dwell_fit =
+        (hold_seconds.max(0.0) / QUICK_RELEASE_BIAS_DWELL_REFERENCE_SECONDS).clamp(0.0, 1.0);
+    // Escalation: a floor on reception (so a true one-touch ball to an open man still gets
+    // lifted) rising to full as the carrier dwells.
+    let escalation = QUICK_RELEASE_BIAS_IMMEDIATE_FLOOR
+        + (1.0 - QUICK_RELEASE_BIAS_IMMEDIATE_FLOOR) * dwell_fit;
+    1.0 + QUICK_RELEASE_BIAS_PASS_LIFT * openness_fit * escalation
+}
+
+/// How "quick" a release was, in [0, 1]: a strict one-touch (first-time) pass or a pass
+/// made within [`QUICK_RELEASE_SHARP_HOLD_SECONDS`] scores 1.0; from there it decays
+/// linearly to 0 at [`QUICK_RELEASE_DWELL_SECONDS`] of dwell. Pure, RNG-free.
+fn quick_release_speed_fit(is_one_touch: bool, hold_seconds: f64) -> f64 {
+    if is_one_touch {
+        return 1.0;
+    }
+    let hold = hold_seconds.max(0.0);
+    if hold <= QUICK_RELEASE_SHARP_HOLD_SECONDS {
+        return 1.0;
+    }
+    let span = (QUICK_RELEASE_DWELL_SECONDS - QUICK_RELEASE_SHARP_HOLD_SECONDS).max(1e-6);
+    (1.0 - (hold - QUICK_RELEASE_SHARP_HOLD_SECONDS) / span).clamp(0.0, 1.0)
+}
+
+/// Tempo reward for completing a FORWARD floor pass to an OPEN, advanced teammate
+/// quickly. Stacks on the per-pass / first-time rewards. Returns 0 when the gate is off,
+/// the action is not a floor pass / is a cross, the ball did not go meaningfully forward,
+/// the receiver was not open enough, or the carrier dwelled past the window. `is_one_touch`
+/// is true for a strict first-time pass; `hold_seconds` is the carrier's time on the ball
+/// before releasing (`actual_time_on_ball_seconds`).
+#[allow(clippy::too_many_arguments)]
+fn quick_release_forward_pass_reward_from_parts(
+    team: Team,
+    flight: PassFlight,
+    is_cross: bool,
+    is_one_touch: bool,
+    hold_seconds: f64,
+    origin: Vec2,
+    target: Vec2,
+    receiver_openness: f64,
+) -> f64 {
+    if !quick_release_pass_reward_enabled() {
+        return 0.0;
+    }
+    quick_release_forward_pass_reward_inner(
+        team,
+        flight,
+        is_cross,
+        is_one_touch,
+        hold_seconds,
+        origin,
+        target,
+        receiver_openness,
+    )
+}
+
+/// Gate-free magnitude core of [`quick_release_forward_pass_reward_from_parts`] — the
+/// pure scoring used by the wrapper (and exercised directly in tests so the math is
+/// covered without touching the process-global env gate).
+#[allow(clippy::too_many_arguments)]
+fn quick_release_forward_pass_reward_inner(
+    team: Team,
+    flight: PassFlight,
+    is_cross: bool,
+    is_one_touch: bool,
+    hold_seconds: f64,
+    origin: Vec2,
+    target: Vec2,
+    receiver_openness: f64,
+) -> f64 {
+    if flight != PassFlight::Floor || is_cross {
+        return 0.0;
+    }
+    let forward_yards = (target.y - origin.y) * team.attack_dir();
+    if !forward_yards.is_finite() || forward_yards < QUICK_RELEASE_MIN_FORWARD_YARDS {
+        return 0.0;
+    }
+    let openness = receiver_openness.clamp(0.0, 1.0);
+    if openness < QUICK_RELEASE_MIN_OPENNESS {
+        return 0.0;
+    }
+    let speed_fit = quick_release_speed_fit(is_one_touch, hold_seconds);
+    if speed_fit <= 0.0 {
+        return 0.0;
+    }
+    let openness_fit =
+        ((openness - QUICK_RELEASE_MIN_OPENNESS) / (1.0 - QUICK_RELEASE_MIN_OPENNESS)).clamp(0.0, 1.0);
+    let forward_fit = (forward_yards / QUICK_RELEASE_FORWARD_REFERENCE_YARDS).clamp(0.0, 1.0);
+    // A barely-qualifying open forward ball still earns the floor; openness + progression
+    // lift it the rest of the way.
+    let quality = (0.55 + 0.25 * openness_fit + 0.20 * forward_fit).clamp(0.0, 1.0);
+    let one_touch_mult = if is_one_touch {
+        QUICK_RELEASE_ONE_TOUCH_MULTIPLIER
+    } else {
+        1.0
+    };
+    (QUICK_RELEASE_PASS_BASE_POINTS * speed_fit * quality * one_touch_mult)
+        .clamp(0.0, QUICK_RELEASE_PASS_MAX_POINTS)
+}
+
 fn cross_scoring_channel_score(
     team: Team,
     origin: Vec2,
@@ -21183,6 +21385,16 @@ fn soccer_transition_reward_with_tactics(
                         target,
                         receiver_openness,
                         pass_into_stride_fit_for_context(&action_context, player.team),
+                    );
+                    reward += quick_release_forward_pass_reward_from_parts(
+                        player.team,
+                        flight,
+                        is_cross,
+                        action == "first-time-pass",
+                        decision.observation.actual_time_on_ball_seconds,
+                        origin,
+                        target,
+                        receiver_openness,
                     );
                     reward += pass_and_move_forward_reward_from_parts(
                         player.team,
