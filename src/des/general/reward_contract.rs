@@ -1,12 +1,13 @@
 //! Versioned soccer reward/penalty contract with anti-specification-gaming checks.
 //!
-//! Penalties are negative rewards. Cost-style consumers should use `cost = -reward`.
-//! The contract records raw component contributions before any downstream clipping
-//! or normalization and enforces terminal match-outcome dominance over shaping.
+//! Penalties are negative rewards. Cost-style consumers use `cost = -reward`.
+//! Raw component contributions are retained before clipping or normalization.
 
-use std::collections::HashSet;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::{
+    collections::HashSet,
+    error::Error,
+    fmt::{Display, Formatter},
+};
 
 pub const REWARD_CONTRACT_SCHEMA_VERSION: u16 = 1;
 
@@ -67,25 +68,95 @@ pub struct RewardContract {
 
 impl RewardContract {
     pub fn soccer_v1() -> Self {
-        use RewardComponentId::*;
-        use RewardGroup::*;
-        use RewardPolarity::*;
+        use RewardComponentId as Id;
+        use RewardGroup as Group;
+        use RewardPolarity as Polarity;
 
         Self {
             schema_version: REWARD_CONTRACT_SCHEMA_VERSION,
             name: "soccer-reward-v1".to_owned(),
             terminal_dominance_margin: 20.0,
             components: vec![
-                RewardComponentSpec { id: GoalFor, group: Terminal, polarity: Reward, minimum: 1.0, maximum: 1.0, weight: 100.0 },
-                RewardComponentSpec { id: GoalAgainst, group: Terminal, polarity: Penalty, minimum: 1.0, maximum: 1.0, weight: -100.0 },
-                RewardComponentSpec { id: ExpectedGoalsDelta, group: Shaping, polarity: Signed, minimum: -3.0, maximum: 3.0, weight: 2.0 },
-                RewardComponentSpec { id: PossessionValueDelta, group: Shaping, polarity: Signed, minimum: -1.0, maximum: 1.0, weight: 0.5 },
-                RewardComponentSpec { id: ProgressiveAction, group: Shaping, polarity: Signed, minimum: -1.0, maximum: 1.0, weight: 0.75 },
-                RewardComponentSpec { id: DefensiveIntegrity, group: Shaping, polarity: Signed, minimum: -1.0, maximum: 1.0, weight: 0.75 },
-                RewardComponentSpec { id: Foul, group: Penalty, polarity: Penalty, minimum: 0.0, maximum: 1.0, weight: -2.0 },
-                RewardComponentSpec { id: Offside, group: Penalty, polarity: Penalty, minimum: 0.0, maximum: 1.0, weight: -1.0 },
-                RewardComponentSpec { id: Turnover, group: Penalty, polarity: Penalty, minimum: 0.0, maximum: 1.0, weight: -2.0 },
-                RewardComponentSpec { id: InfeasibleAction, group: Safety, polarity: Penalty, minimum: 0.0, maximum: 1.0, weight: -5.0 },
+                RewardComponentSpec {
+                    id: Id::GoalFor,
+                    group: Group::Terminal,
+                    polarity: Polarity::Reward,
+                    minimum: 1.0,
+                    maximum: 1.0,
+                    weight: 100.0,
+                },
+                RewardComponentSpec {
+                    id: Id::GoalAgainst,
+                    group: Group::Terminal,
+                    polarity: Polarity::Penalty,
+                    minimum: 1.0,
+                    maximum: 1.0,
+                    weight: -100.0,
+                },
+                RewardComponentSpec {
+                    id: Id::ExpectedGoalsDelta,
+                    group: Group::Shaping,
+                    polarity: Polarity::Signed,
+                    minimum: -3.0,
+                    maximum: 3.0,
+                    weight: 2.0,
+                },
+                RewardComponentSpec {
+                    id: Id::PossessionValueDelta,
+                    group: Group::Shaping,
+                    polarity: Polarity::Signed,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                    weight: 0.5,
+                },
+                RewardComponentSpec {
+                    id: Id::ProgressiveAction,
+                    group: Group::Shaping,
+                    polarity: Polarity::Signed,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                    weight: 0.75,
+                },
+                RewardComponentSpec {
+                    id: Id::DefensiveIntegrity,
+                    group: Group::Shaping,
+                    polarity: Polarity::Signed,
+                    minimum: -1.0,
+                    maximum: 1.0,
+                    weight: 0.75,
+                },
+                RewardComponentSpec {
+                    id: Id::Foul,
+                    group: Group::Penalty,
+                    polarity: Polarity::Penalty,
+                    minimum: 0.0,
+                    maximum: 1.0,
+                    weight: -2.0,
+                },
+                RewardComponentSpec {
+                    id: Id::Offside,
+                    group: Group::Penalty,
+                    polarity: Polarity::Penalty,
+                    minimum: 0.0,
+                    maximum: 1.0,
+                    weight: -1.0,
+                },
+                RewardComponentSpec {
+                    id: Id::Turnover,
+                    group: Group::Penalty,
+                    polarity: Polarity::Penalty,
+                    minimum: 0.0,
+                    maximum: 1.0,
+                    weight: -2.0,
+                },
+                RewardComponentSpec {
+                    id: Id::InfeasibleAction,
+                    group: Group::Safety,
+                    polarity: Polarity::Penalty,
+                    minimum: 0.0,
+                    maximum: 1.0,
+                    weight: -5.0,
+                },
             ],
         }
     }
@@ -140,6 +211,7 @@ impl RewardContract {
                     component.id
                 )));
             }
+
             let (weighted_minimum, weighted_maximum) = component.weighted_bounds();
             match component.polarity {
                 RewardPolarity::Reward if weighted_minimum < 0.0 => {
@@ -156,6 +228,7 @@ impl RewardContract {
                 }
                 _ => {}
             }
+
             if component.group == RewardGroup::Terminal {
                 terminal_ids.insert(component.id);
             }
@@ -232,10 +305,10 @@ impl RewardContract {
         })
     }
 
-    /// Score one transition while retaining the raw component breakdown.
+    /// Score one transition while retaining its raw component breakdown.
     ///
-    /// Missing components contribute zero. Duplicate or out-of-range runtime
-    /// values are rejected rather than silently double-counted or clipped.
+    /// Missing components contribute zero. Duplicate or out-of-range values are
+    /// rejected instead of silently double-counted or clipped.
     pub fn score(
         &self,
         values: &[(RewardComponentId, f64)],
@@ -306,7 +379,10 @@ pub struct RewardBreakdown {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RewardContractError {
-    UnsupportedSchemaVersion { found: u16, expected: u16 },
+    UnsupportedSchemaVersion {
+        found: u16,
+        expected: u16,
+    },
     InvalidContract(String),
     DuplicateComponent(RewardComponentId),
     MissingComponent(RewardComponentId),
