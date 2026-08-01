@@ -6,6 +6,7 @@ pub use des_engine::des::general::{
 };
 
 pub mod exploration_trace;
+pub mod reward_contract;
 pub mod soccer;
 pub mod soccer_elo;
 pub mod soccer_eval_gate;
