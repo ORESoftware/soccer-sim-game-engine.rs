@@ -5,6 +5,7 @@ pub use des_engine::des::general::{
     des_base, general, hungarian, ip_mip_des, lp, lp_des, mpc_point_mass, neural_network, prng, qp,
 };
 
+pub mod exploration_trace;
 pub mod soccer;
 pub mod soccer_elo;
 pub mod soccer_eval_gate;
