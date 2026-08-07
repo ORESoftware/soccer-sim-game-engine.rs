@@ -57033,7 +57033,10 @@ impl WorldSnapshot {
         let target = weighted * (1.0 / total);
         let shift = target - best;
         let shift_len = shift.len();
-        let blended = if shift_len > OFF_BALL_RUN_MULTIMODAL_BLEND_MAX_YARDS && shift_len > 1e-9 {
+        // As above: shift_len > OFF_BALL_RUN_MULTIMODAL_BLEND_MAX_YARDS (7.0)
+        // already guarantees the divisor is non-zero, so the old
+        // `&& shift_len > 1e-9` clause was dead.
+        let blended = if shift_len > OFF_BALL_RUN_MULTIMODAL_BLEND_MAX_YARDS {
             best + shift * (OFF_BALL_RUN_MULTIMODAL_BLEND_MAX_YARDS / shift_len)
         } else {
             target
