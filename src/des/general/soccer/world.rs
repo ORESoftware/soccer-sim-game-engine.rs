@@ -35783,7 +35783,10 @@ impl SoccerMatch {
         }
         let delta = best - target;
         let len = delta.len();
-        if len > MPC_PITCH_VALUE_REFERENCE_MAX_NUDGE_YARDS && len > 1e-9 {
+        // The `MAX_NUDGE / len` division below needs len != 0; that is already
+        // implied by len > MPC_PITCH_VALUE_REFERENCE_MAX_NUDGE_YARDS (3.0), so
+        // the old `&& len > 1e-9` clause could never change the outcome.
+        if len > MPC_PITCH_VALUE_REFERENCE_MAX_NUDGE_YARDS {
             (target + delta * (MPC_PITCH_VALUE_REFERENCE_MAX_NUDGE_YARDS / len))
                 .clamp_to_pitch(field_width, field_length)
         } else {
