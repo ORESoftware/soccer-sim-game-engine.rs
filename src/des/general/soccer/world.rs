@@ -66286,10 +66286,9 @@ impl WorldSnapshot {
             self.field_width,
             self.field_length,
         );
-        if !(directive.flank_attack_policy.is_flank()
-            || crashing_box && crosser_outer_final_third
-            || outside_midfielder && crosser_outer_final_third)
-        {
+        let has_crossing_role = directive.flank_attack_policy.is_flank()
+            || (crosser_outer_final_third && (crashing_box || outside_midfielder));
+        if !has_crossing_role {
             return None;
         }
         if outside_midfielder && !crosser_outer_final_third {
@@ -73637,8 +73636,8 @@ impl WorldSnapshot {
             control_radius,
         );
         perp_gap <= CONTROL_AT_FEET_TRAP_RADIUS_YARDS
-            || control_quality >= CONTROL_MIN_VIABLE_QUALITY
-                && mpc_fit.qp_accel_fit >= MPC_BALL_CONTROL_FORCED_MIN_QP_ACCEL_FIT
+            || (control_quality >= CONTROL_MIN_VIABLE_QUALITY
+                && mpc_fit.qp_accel_fit >= MPC_BALL_CONTROL_FORCED_MIN_QP_ACCEL_FIT)
     }
 
     /// Movement-aware [`clear_line`]: a defender currently OUTSIDE the lane corridor
