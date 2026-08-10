@@ -177,9 +177,7 @@ impl RewardContract {
                 "contract name must not be empty".to_owned(),
             ));
         }
-        if !self.terminal_dominance_margin.is_finite()
-            || self.terminal_dominance_margin < 0.0
-        {
+        if !self.terminal_dominance_margin.is_finite() || self.terminal_dominance_margin < 0.0 {
             return Err(RewardContractError::InvalidContract(
                 "terminal dominance margin must be finite and non-negative".to_owned(),
             ));
@@ -234,26 +232,20 @@ impl RewardContract {
             }
         }
 
-        let expected_terminals = HashSet::from([
-            RewardComponentId::GoalFor,
-            RewardComponentId::GoalAgainst,
-        ]);
+        let expected_terminals =
+            HashSet::from([RewardComponentId::GoalFor, RewardComponentId::GoalAgainst]);
         if terminal_ids != expected_terminals {
             return Err(RewardContractError::InvalidContract(
                 "terminal components must be exactly GoalFor and GoalAgainst".to_owned(),
             ));
         }
 
-        let goal_for = *self
-            .component(RewardComponentId::GoalFor)
-            .ok_or(RewardContractError::MissingComponent(
-                RewardComponentId::GoalFor,
-            ))?;
-        let goal_against = *self
-            .component(RewardComponentId::GoalAgainst)
-            .ok_or(RewardContractError::MissingComponent(
-                RewardComponentId::GoalAgainst,
-            ))?;
+        let goal_for = *self.component(RewardComponentId::GoalFor).ok_or(
+            RewardContractError::MissingComponent(RewardComponentId::GoalFor),
+        )?;
+        let goal_against = *self.component(RewardComponentId::GoalAgainst).ok_or(
+            RewardContractError::MissingComponent(RewardComponentId::GoalAgainst),
+        )?;
         let (goal_for_minimum, goal_for_maximum) = goal_for.weighted_bounds();
         let (goal_against_minimum, goal_against_maximum) = goal_against.weighted_bounds();
         if (goal_for_minimum - goal_for_maximum).abs() > 1.0e-12
@@ -285,11 +277,9 @@ impl RewardContract {
             });
         }
 
-        let infeasible = *self
-            .component(RewardComponentId::InfeasibleAction)
-            .ok_or(RewardContractError::MissingComponent(
-                RewardComponentId::InfeasibleAction,
-            ))?;
+        let infeasible = *self.component(RewardComponentId::InfeasibleAction).ok_or(
+            RewardContractError::MissingComponent(RewardComponentId::InfeasibleAction),
+        )?;
         let (infeasible_minimum, infeasible_maximum) = infeasible.weighted_bounds();
         if infeasible_minimum >= 0.0 || infeasible_maximum > 0.0 {
             return Err(RewardContractError::InvalidContract(

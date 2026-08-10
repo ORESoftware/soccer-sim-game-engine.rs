@@ -166,7 +166,9 @@ impl ActionSelectionTrace {
         let executed_rank = ranked
             .iter()
             .position(|candidate| candidate.action_id == executed_action_id)
-            .ok_or(SelectionError::ExecutedActionNotFeasible(executed_action_id))?;
+            .ok_or(SelectionError::ExecutedActionNotFeasible(
+                executed_action_id,
+            ))?;
 
         self.executed_action_id = executed_action_id;
         self.executed_rank = executed_rank;
@@ -177,8 +179,7 @@ impl ActionSelectionTrace {
         } else {
             self.executed_probability = None;
             self.executed_log_probability = None;
-            self.likelihood_status =
-                ExecutedLikelihoodStatus::UnknownAfterDownstreamOverride;
+            self.likelihood_status = ExecutedLikelihoodStatus::UnknownAfterDownstreamOverride;
         }
         Ok(())
     }
@@ -203,7 +204,10 @@ impl Display for SelectionError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnsupportedSchemaVersion { found, expected } => {
-                write!(formatter, "unsupported schema version {found}; expected {expected}")
+                write!(
+                    formatter,
+                    "unsupported schema version {found}; expected {expected}"
+                )
             }
             Self::InvalidProfile(message) => formatter.write_str(message),
             Self::NoFeasibleCandidates => formatter.write_str("no feasible action candidates"),
@@ -230,7 +234,11 @@ pub fn rank_feasible_candidates(
     candidates: &[ActionCandidate],
 ) -> Result<Vec<ActionCandidate>, SelectionError> {
     let mut ranked = Vec::new();
-    for candidate in candidates.iter().copied().filter(|candidate| candidate.feasible) {
+    for candidate in candidates
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.feasible)
+    {
         if !candidate.score.is_finite() {
             return Err(SelectionError::NonFiniteScore(candidate.action_id));
         }
@@ -275,8 +283,14 @@ pub fn select_action(
     candidates: &[ActionCandidate],
 ) -> Result<ActionSelectionTrace, SelectionError> {
     let distribution = behavior_distribution(profile, candidates)?;
-    let probabilities: Vec<f64> = distribution.iter().map(|(_, probability)| *probability).collect();
-    let selected_rank = sample_index(&probabilities, deterministic_unit_draw(profile.seed, decision_nonce));
+    let probabilities: Vec<f64> = distribution
+        .iter()
+        .map(|(_, probability)| *probability)
+        .collect();
+    let selected_rank = sample_index(
+        &probabilities,
+        deterministic_unit_draw(profile.seed, decision_nonce),
+    );
     let (selected, selected_probability) = distribution[selected_rank];
     let selected_log_probability = selected_probability.max(MIN_LOG_PROBABILITY_INPUT).ln();
 
@@ -297,10 +311,7 @@ pub fn select_action(
     })
 }
 
-fn strategy_probabilities(
-    strategy: &ExplorationStrategy,
-    ranked: &[ActionCandidate],
-) -> Vec<f64> {
+fn strategy_probabilities(strategy: &ExplorationStrategy, ranked: &[ActionCandidate]) -> Vec<f64> {
     match strategy {
         ExplorationStrategy::Greedy => one_hot(ranked.len(), 0),
         ExplorationStrategy::EpsilonGreedy { epsilon } => {
@@ -321,9 +332,7 @@ fn strategy_probabilities(
             }
             probabilities
         }
-        ExplorationStrategy::Boltzmann { temperature } => {
-            softmax(ranked, *temperature, 0.0)
-        }
+        ExplorationStrategy::Boltzmann { temperature } => softmax(ranked, *temperature, 0.0),
         ExplorationStrategy::UncertaintyDirected { beta, temperature } => {
             softmax(ranked, *temperature, *beta)
         }
@@ -415,10 +424,30 @@ mod tests {
 
     fn candidates() -> [ActionCandidate; 4] {
         [
-            ActionCandidate { action_id: 10, score: 5.0, uncertainty: 0.1, feasible: true },
-            ActionCandidate { action_id: 20, score: 4.0, uncertainty: 0.2, feasible: true },
-            ActionCandidate { action_id: 30, score: 3.0, uncertainty: 2.0, feasible: true },
-            ActionCandidate { action_id: 40, score: 100.0, uncertainty: 0.0, feasible: false },
+            ActionCandidate {
+                action_id: 10,
+                score: 5.0,
+                uncertainty: 0.1,
+                feasible: true,
+            },
+            ActionCandidate {
+                action_id: 20,
+                score: 4.0,
+                uncertainty: 0.2,
+                feasible: true,
+            },
+            ActionCandidate {
+                action_id: 30,
+                score: 3.0,
+                uncertainty: 2.0,
+                feasible: true,
+            },
+            ActionCandidate {
+                action_id: 40,
+                score: 100.0,
+                uncertainty: 0.0,
+                feasible: false,
+            },
         ]
     }
 
@@ -428,9 +457,16 @@ mod tests {
 
     #[test]
     fn rank_profile_exposes_exact_distribution() {
-        let distribution = behavior_distribution(&ExplorationProfile::rank_70_20_10(1), &candidates())
-            .expect("valid distribution");
-        assert_eq!(distribution.iter().map(|(item, _)| item.action_id).collect::<Vec<_>>(), vec![10, 20, 30]);
+        let distribution =
+            behavior_distribution(&ExplorationProfile::rank_70_20_10(1), &candidates())
+                .expect("valid distribution");
+        assert_eq!(
+            distribution
+                .iter()
+                .map(|(item, _)| item.action_id)
+                .collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
         assert_close(distribution[0].1, 0.70);
         assert_close(distribution[1].1, 0.20);
         assert_close(distribution[2].1, 0.10);
@@ -452,11 +488,19 @@ mod tests {
                 schema_version: EXPLORATION_TRACE_SCHEMA_VERSION,
                 name: "evaluation".to_owned(),
                 mode,
-                strategy: ExplorationStrategy::RankWeighted { weights: vec![0.1, 0.2, 0.7] },
+                strategy: ExplorationStrategy::RankWeighted {
+                    weights: vec![0.1, 0.2, 0.7],
+                },
                 seed: 1,
             };
             let distribution = behavior_distribution(&profile, &candidates()).unwrap();
-            assert_eq!(distribution.iter().map(|(_, probability)| *probability).collect::<Vec<_>>(), vec![1.0, 0.0, 0.0]);
+            assert_eq!(
+                distribution
+                    .iter()
+                    .map(|(_, probability)| *probability)
+                    .collect::<Vec<_>>(),
+                vec![1.0, 0.0, 0.0]
+            );
         }
     }
 
@@ -464,12 +508,21 @@ mod tests {
     fn downstream_override_never_reuses_selected_probability() {
         let profile = ExplorationProfile::rank_70_20_10(7);
         let mut trace = select_action(&profile, 5, &candidates()).unwrap();
-        let replacement = if trace.selected_action_id == 10 { 20 } else { 10 };
-        trace.reconcile_executed_action(replacement, &candidates()).unwrap();
+        let replacement = if trace.selected_action_id == 10 {
+            20
+        } else {
+            10
+        };
+        trace
+            .reconcile_executed_action(replacement, &candidates())
+            .unwrap();
         assert_eq!(trace.executed_action_id, replacement);
         assert_eq!(trace.executed_probability, None);
         assert_eq!(trace.executed_log_probability, None);
-        assert_eq!(trace.likelihood_status, ExecutedLikelihoodStatus::UnknownAfterDownstreamOverride);
+        assert_eq!(
+            trace.likelihood_status,
+            ExecutedLikelihoodStatus::UnknownAfterDownstreamOverride
+        );
         assert!(!trace.has_exact_executed_likelihood());
     }
 
@@ -477,9 +530,14 @@ mod tests {
     fn unchanged_execution_keeps_exact_likelihood() {
         let profile = ExplorationProfile::rank_70_20_10(7);
         let mut trace = select_action(&profile, 5, &candidates()).unwrap();
-        trace.reconcile_executed_action(trace.selected_action_id, &candidates()).unwrap();
+        trace
+            .reconcile_executed_action(trace.selected_action_id, &candidates())
+            .unwrap();
         assert_eq!(trace.executed_probability, Some(trace.selected_probability));
-        assert_eq!(trace.executed_log_probability, Some(trace.selected_log_probability));
+        assert_eq!(
+            trace.executed_log_probability,
+            Some(trace.selected_log_probability)
+        );
         assert!(trace.has_exact_executed_likelihood());
     }
 
@@ -489,7 +547,10 @@ mod tests {
             schema_version: EXPLORATION_TRACE_SCHEMA_VERSION,
             name: "uncertainty".to_owned(),
             mode: ExplorationMode::Training,
-            strategy: ExplorationStrategy::UncertaintyDirected { beta: 2.0, temperature: 0.05 },
+            strategy: ExplorationStrategy::UncertaintyDirected {
+                beta: 2.0,
+                temperature: 0.05,
+            },
             seed: 1,
         };
         let distribution = behavior_distribution(&profile, &candidates()).unwrap();
@@ -503,8 +564,18 @@ mod tests {
     #[test]
     fn invalid_candidates_and_profiles_are_rejected() {
         let duplicate = [
-            ActionCandidate { action_id: 1, score: 1.0, uncertainty: 0.0, feasible: true },
-            ActionCandidate { action_id: 1, score: 0.0, uncertainty: 0.0, feasible: true },
+            ActionCandidate {
+                action_id: 1,
+                score: 1.0,
+                uncertainty: 0.0,
+                feasible: true,
+            },
+            ActionCandidate {
+                action_id: 1,
+                score: 0.0,
+                uncertainty: 0.0,
+                feasible: true,
+            },
         ];
         assert_eq!(
             select_action(&ExplorationProfile::rank_70_20_10(1), 1, &duplicate),
@@ -522,8 +593,14 @@ mod tests {
 
     #[test]
     fn rank_weights_renormalize_for_short_candidate_lists() {
-        let short = [ActionCandidate { action_id: 7, score: 2.0, uncertainty: 0.0, feasible: true }];
-        let distribution = behavior_distribution(&ExplorationProfile::rank_70_20_10(1), &short).unwrap();
+        let short = [ActionCandidate {
+            action_id: 7,
+            score: 2.0,
+            uncertainty: 0.0,
+            feasible: true,
+        }];
+        let distribution =
+            behavior_distribution(&ExplorationProfile::rank_70_20_10(1), &short).unwrap();
         assert_eq!(distribution, vec![(short[0], 1.0)]);
     }
 }
