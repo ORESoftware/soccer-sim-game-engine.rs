@@ -94396,11 +94396,11 @@ fn static_soccer_frame_stream_uses_slim_playback_jsonl() {
     assert!(first_frame["officials"][0].get("velocity").is_some());
     assert!(first_frame["officials"][0].get("acceleration").is_some());
     assert!(first_frame["officials"][0].get("jerk").is_some());
-    assert!(!first_frame["players"][0].get("skills").is_some());
-    assert!(!first_frame["players"][0].get("positionHistory").is_some());
-    assert!(!first_frame["players"][0].get("lastDecision").is_some());
-    assert!(!first_frame.get("sharedPositions").is_some());
-    assert!(!first_frame.get("agentSchedule").is_some());
+    assert!(first_frame["players"][0].get("skills").is_none());
+    assert!(first_frame["players"][0].get("positionHistory").is_none());
+    assert!(first_frame["players"][0].get("lastDecision").is_none());
+    assert!(first_frame.get("sharedPositions").is_none());
+    assert!(first_frame.get("agentSchedule").is_none());
     assert!(first_frame.get("agentScheduleSummary").is_some());
     assert_eq!(
         first_frame["agentScheduleSummary"]["expectedTotalAgents"],
@@ -100255,7 +100255,9 @@ fn same_team_proximity_grace_matches_the_worked_example() {
         "just under LT5 grace, still forgiven: b5={b5}"
     );
     assert!(
-        b5 < SAME_TEAM_PROXIMITY_GRACE_LT6_SECONDS && b5 < SAME_TEAM_PROXIMITY_GRACE_LT7_SECONDS,
+        // LT6 (1.0s) < LT7 (1.5s), so being under LT6's grace already puts b5
+        // under LT7's; the old `&& b5 < ..._LT7_SECONDS` clause was dead.
+        b5 < SAME_TEAM_PROXIMITY_GRACE_LT6_SECONDS,
         "the tight timer trips first, before the wider ones' grace"
     );
     run(&mut b7, &mut b6, &mut b5, dive, 0.2);
