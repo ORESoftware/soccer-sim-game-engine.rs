@@ -20,7 +20,6 @@ pub mod soccer_learning;
 pub mod soccer_learning_pg;
 #[cfg(feature = "planner")]
 pub mod soccer_planner;
-pub mod telemetry;
 
 // Thin demo runners (the bins wrap these).
 pub mod main_soccer;

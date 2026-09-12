@@ -1,20 +1,10 @@
-<!-- BEGIN k8s-cluster-submodule-notice -->
-> [!NOTE]
-> **Canonical source.** This repository is the source of truth for its code. It
-> is also vendored as a **secondary** git submodule of
-> [ORESoftware/k8s-cluster](https://github.com/ORESoftware/k8s-cluster) at
-> `remote/submodules/soccer-sim-game-engine.rs` — make changes here, not in that submodule checkout.
->
-> On disk: source clone `~/codes/ores/soccer-sim-game-engine.rs` · submodule checkout `~/codes/ores/k8s-cluster/remote/submodules/soccer-sim-game-engine.rs`.
-<!-- END k8s-cluster-submodule-notice -->
-
 # soccer_engine (soccer-sim-game-engine.rs)
 
 Agnostic 2D soccer simulation + reinforcement-learning game engine. The soccer domain
 (match engine, rules, agents, planner, rotation, learning) extracted out of
 [`discrete-event-system.rs`](../discrete-event-system.rs) (`des_engine`), which supplies
-the generic optimization (formation LP solved by Clarabel/IPM, with deterministic fallback)
-and learning (neural MLP, policy-gradient, MDP/POMDP, PRNG, animation) primitives it builds on.
+the generic optimization (LP / IP-MIP / Clarabel) and learning (neural MLP +
+policy-gradient, MDP/POMDP, PRNG, animation) primitives it builds on.
 
 Transport-agnostic by design: construct a `SoccerMatch` / `SoccerRealtimeSession` and
 drive it directly (a desktop game does this) — no HTTP is required. The web servers
@@ -45,24 +35,6 @@ or unset, is **off**.
 > the fast default; the remaining per-tick cost is the per-player decision (scales with
 > how congested play is).
 
-### Telemetry and structured logs
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `SOCCER_TELEMETRY_ENABLED` | auto | Enables the shared tracing subscriber; cluster jobs set this explicitly. |
-| `SOCCER_LOG_JSON` | off | Emit tracing events as newline-delimited JSON to stdout for Promtail/Loki. |
-| `SOCCER_RUST_LOG` | `info,soccer_engine=info` | Soccer-specific tracing filter; falls back to `RUST_LOG`. |
-| `SOCCER_CLUSTER_NAME` | local/unset | Cluster resource attribute for logs/traces. |
-| `SOCCER_OTEL_TRACES` | endpoint-driven | Enable OTLP/HTTP trace export. |
-| `SOCCER_OTEL_METRICS` | endpoint-driven | Enable OTLP/HTTP metric export. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Generic collector base URL; signal paths are derived automatically. |
-| `SOCCER_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://127.0.0.1:4318/v1/traces` | OTLP/HTTP trace endpoint when trace export is enabled. |
-| `SOCCER_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://127.0.0.1:4318/v1/metrics` | OTLP/HTTP metric endpoint when metric export is enabled. |
-
-Service and job binaries publish execution start/completion counters and duration
-histograms with bounded service/outcome attributes. In Kubernetes, the collector
-forwards traces and exposes OTLP metrics for Prometheus scraping.
-
 ### Live server
 
 | Flag | Default | Effect |
@@ -79,9 +51,9 @@ forwards traces and exposes OTLP metrics for Prometheus scraping.
 | `DD_SOCCER_DISABLE_SPACING_NUDGE` | Disable the territorial-spacing nudge. |
 | `DD_SOCCER_DISABLE_DEFENSIVE_PUSHUP` | Disable the defensive line push-up. |
 | `DD_SOCCER_DISABLE_FORMATION_STAGGER` | Disable formation staggering. |
-| `SOCCER_FORMATION_LP_IPM` / `SOCCER_FORMATION_LP_INTERNAL_SIMPLEX` | Run the exact per-tick formation solve through fast Clarabel/IPM. **Default ON in optimized builds, OFF in debug**; if disabled, the tick uses a heuristic-anchor fallback. `SOCCER_FORMATION_LP_INTERNAL_SIMPLEX` is a legacy alias, not the solver choice. Use `SOCCER_FORMATION_LP_DETERMINISTIC=1` only for headless reproducibility; that routes to the slower deterministic internal simplex. |
+| `SOCCER_FORMATION_LP_INTERNAL_SIMPLEX` | Run the exact per-tick formation solve (Clarabel interior-point). **Default OFF**: the realtime tick skips the solve and uses a fast heuristic-anchor fallback. (Name is a fossil — the enabled solver is Clarabel/IPM, not a simplex.) |
 | `LP_SOLVER` | Override the soccer-rotation LP-relaxation backend. When unset, the rotation policy tries local HiGHS dual simplex first and falls back to the internal simplex if the fast path is unavailable. |
-| `MIP_LP_ALGO` / `MIP_ALLOW_EXTERNAL_SOLVERS` | Rotation-demo compatibility knobs from the generic DES layer. The soccer formation path does not use MILP/branch-and-bound; it uses continuous LP/IPM allocation plus per-player MPC execution. |
+| `MIP_LP_ALGO` / `MIP_ALLOW_EXTERNAL_SOLVERS` | Select the IP/MIP LP-relaxation backend. The rotation demo defaults to `auto` with external solvers allowed; set `MIP_ALLOW_EXTERNAL_SOLVERS=0` to force in-house fallback behavior. |
 | `SOCCER_LP_DEBUG` / `SOCCER_SHOW_LP_BOUND` / `SOCCER_GOAL_DEBUG` | Extra LP / goal diagnostics. |
 
 ### Learning / Postgres / artifacts
@@ -97,16 +69,5 @@ forwards traces and exposes OTLP metrics for Prometheus scraping.
 ## Tests
 
 ```sh
-./shell cargo test --lib
+cargo test --lib
 ```
-## Build lifecycle
-
-The repository shell routes build-producing Cargo commands through
-`scripts/cargo-fresh`. When the soccer/DES source, toolchain, or Cargo build arguments change, it
-uses package- and profile-aware `cargo clean` for only `soccer_engine` and its local `des_engine`
-dependency before compiling the replacement. An identical build reuses the current cache, a debug
-check cannot remove release executables, and a target profile backing a running executable is never
-cleaned or marked current; it is reclaimed by the first matching build after that process exits.
-Incremental compilation is disabled, preventing superseded `dep-graph.bin`,
-`libsoccer_engine-*`, `des_engine*`, and related compiler generations from accumulating
-indefinitely. Direct `cargo ...` remains available when bypassing this lifecycle is intentional.

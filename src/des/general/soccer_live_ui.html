@@ -6,40 +6,17 @@
 <title>Live Soccer Simulation</title>
 <style>
   :root {
-    /* design-system tokens (shared with the 5-a-side viz) — dark default, theme-aware */
-    --bg: #0b140e; --panel: #101c14; --panel-2: #0d1710;
-    --ink: #e8f0e9; --muted: #93a89a; --ink-dim: #93a89a;
-    --line: #22362a; --accent: #2fe0b6; --good: #57d979; --bad: #ff6b5e;
-    --shadow: 0 1px 0 rgba(255,255,255,.03), 0 18px 40px -24px rgba(0,0,0,.8);
-    /* pitch / team colors (used by the canvas renderer in both themes) */
-    --home: #3b93ff; --away: #ff6b5e; --official: #c7d3cb;
-    --field: #12351f; --field2: #1c5233; --gold: #e0b64a;
-  }
-  @media (prefers-color-scheme: light) {
-    :root {
-      --bg: #eef2ec; --panel: #ffffff; --panel-2: #f4f7f2;
-      --ink: #0d1a12; --muted: #59705f; --ink-dim: #59705f;
-      --line: #dbe4dc; --accent: #0f9d78; --good: #1c9d4b; --bad: #d33a2c;
-      --shadow: 0 1px 0 rgba(255,255,255,.6), 0 20px 44px -28px rgba(20,40,28,.4);
-      --home: #1f6feb; --away: #d64545; --official: #111827;
-      --field: #1e5233; --field2: #2f9b57; --gold: #c58a13;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg: #0b140e; --panel: #101c14; --panel-2: #0d1710;
-    --ink: #e8f0e9; --muted: #93a89a; --ink-dim: #93a89a;
-    --line: #22362a; --accent: #2fe0b6; --good: #57d979; --bad: #ff6b5e;
-    --shadow: 0 1px 0 rgba(255,255,255,.03), 0 18px 40px -24px rgba(0,0,0,.8);
-    --home: #3b93ff; --away: #ff6b5e; --official: #c7d3cb;
-    --field: #12351f; --field2: #1c5233; --gold: #e0b64a;
-  }
-  :root[data-theme="light"] {
-    --bg: #eef2ec; --panel: #ffffff; --panel-2: #f4f7f2;
-    --ink: #0d1a12; --muted: #59705f; --ink-dim: #59705f;
-    --line: #dbe4dc; --accent: #0f9d78; --good: #1c9d4b; --bad: #d33a2c;
-    --shadow: 0 1px 0 rgba(255,255,255,.6), 0 20px 44px -28px rgba(20,40,28,.4);
-    --home: #1f6feb; --away: #d64545; --official: #111827;
-    --field: #1e5233; --field2: #2f9b57; --gold: #c58a13;
+    --bg: #eef1f4;
+    --ink: #172026;
+    --muted: #65727c;
+    --line: #cbd4da;
+    --panel: #ffffff;
+    --home: #1f6feb;
+    --away: #d64545;
+    --official: #111827;
+    --field: #238547;
+    --field2: #2f9b57;
+    --gold: #c58a13;
   }
   * { box-sizing: border-box; }
   html { height: 100%; }
@@ -66,7 +43,7 @@
     align-items: center;
     padding: 12px 18px;
     border-bottom: 1px solid var(--line);
-    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    background: #f8fafb;
   }
   h1 {
     margin: 0;
@@ -90,7 +67,7 @@
     padding: 4px 8px;
     border: 1px solid var(--line);
     border-radius: 6px;
-    background: var(--panel-2);
+    background: #fff;
     line-height: 1.15;
   }
   .score .ontgt {
@@ -143,14 +120,14 @@
   button, select, input, .control-link {
     min-height: 32px;
     border: 1px solid var(--line);
-    background: var(--panel-2);
+    background: #fff;
     color: var(--ink);
     border-radius: 6px;
     font-size: 13px;
   }
-  button { min-width: 38px; padding: 0 10px; cursor: pointer; transition: background .12s, border-color .12s; }
-  button:hover { background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); }
-  button.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  button { min-width: 38px; padding: 0 10px; cursor: pointer; }
+  button:hover { background: #f0f4f7; }
+  button.active { background: #172026; color: #fff; }
   .control-link {
     display: inline-flex;
     align-items: center;
@@ -158,7 +135,7 @@
     padding: 0 10px;
     text-decoration: none;
   }
-  .control-link:hover { background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); }
+  .control-link:hover { background: #f0f4f7; }
   select { padding: 0 8px; max-width: 190px; }
   input[type="number"] { width: 76px; padding: 0 7px; font-variant-numeric: tabular-nums; }
   input[type="text"] { min-width: 0; padding: 0 7px; }
@@ -169,7 +146,7 @@
     grid-template-columns: 1fr auto;
     gap: 8px;
     padding: 7px 0;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid #eef1f4;
     font-size: 13px;
   }
   .metric b {
@@ -187,9 +164,9 @@
   .telemetry-chip {
     min-width: 0;
     padding: 5px 6px;
-    border: 1px solid var(--line);
+    border: 1px solid #e2e9ee;
     border-radius: 6px;
-    background: var(--panel-2);
+    background: #f8fafb;
     font-variant-numeric: tabular-nums;
   }
   .telemetry-chip span {
@@ -213,14 +190,14 @@
     margin-top: 4px;
     overflow: hidden;
     border-radius: 999px;
-    background: var(--line);
+    background: #dbe4ea;
   }
   .telemetry-bar i {
     display: block;
     height: 100%;
     width: 0;
     border-radius: inherit;
-    background: var(--accent);
+    background: #238547;
   }
   .telemetry-empty {
     grid-column: 1 / -1;
@@ -403,48 +380,12 @@
 .dtopt.chosen{border-color:#5fd08a;color:#172026;background:#5fd08a;font-weight:700}
 #analyzeClose,#analyzeCopy{min-width:30px;height:28px;padding:0 12px;font-weight:700;border-radius:6px;border:1px solid #2f9b57;background:#16241c;color:#cfe9d8;cursor:pointer}
 #analyzeClose:hover,#analyzeCopy:hover{background:#1d3327}
-  /* ---- KPI tiles + pass-mix bar + theme toggle (design-system additions) ---- */
-  .kpigrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 10px}
-  .kpi{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);
-    border-radius:10px;padding:9px 10px;box-shadow:var(--shadow);min-width:0}
-  .kpi .v{font-weight:800;font-size:21px;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
-  .kpi .k{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-dim);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kpi .sub{font-size:10px;color:var(--ink-dim);margin-top:1px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kpi .v.good{color:var(--good)} .kpi .v.bad{color:var(--bad)} .kpi .v.accent{color:var(--accent)}
-  .passmix{margin:0 0 12px}
-  .passbar{display:flex;height:22px;border-radius:7px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow)}
-  .passbar .seg{display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;
-    color:#08120c;font-variant-numeric:tabular-nums;min-width:0;white-space:nowrap;transition:flex-grow .3s}
-  .passlegend{display:flex;gap:10px;flex-wrap:wrap;font-size:10px;color:var(--ink-dim);margin-top:6px}
-  .passlegend .sw{display:inline-flex;align-items:center;gap:5px}
-  .passlegend .sw i{width:9px;height:9px;border-radius:2px;display:inline-block}
-  .themebtn{border:1px solid var(--line);background:var(--panel-2);color:var(--ink);border-radius:6px;
-    min-height:28px;padding:0 10px;cursor:pointer;font-size:12px;line-height:1}
-  .themebtn:hover{background:color-mix(in srgb,var(--accent) 14%,var(--panel-2))}
-  /* ---- learning-climb charts (11v11 training history, live from the climb sidecar) ---- */
-  .climb{margin:2px 0 12px}
-  .climb .head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
-  .climb .legend{display:flex;gap:10px;font-size:10px;color:var(--ink-dim)}
-  .climb .legend .sw{display:inline-flex;align-items:center;gap:5px}
-  .climb .legend .sw i{width:14px;border-top:2px solid;display:inline-block}
-  .climbgrid{display:grid;grid-template-columns:1fr;gap:9px}
-  .climbcard{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);
-    border-radius:10px;padding:8px 9px 5px;box-shadow:var(--shadow);min-width:0}
-  .climbcard .ct{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-bottom:2px}
-  .climbcard .ctl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-dim);
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .climbcard .cval{font-size:12px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink);white-space:nowrap}
-  .climbcard canvas{display:block;width:100%;height:72px}
-  .climb .note{font-size:10px;color:var(--ink-dim);margin-top:3px;line-height:1.35}
 </style>
 </head>
 <body>
 <div class="app">
   <header>
-    <div style="display:flex;align-items:center;gap:12px;min-width:0">
-      <h1>Live Soccer Simulation</h1>
-      <button class="themebtn" id="themeToggle" title="Toggle light / dark theme" aria-label="Toggle theme">◐ Theme</button>
-    </div>
+    <h1>Live Soccer Simulation</h1>
     <div class="score">
       <span id="homeScore">
         <b id="homeGoals">0</b>
@@ -496,37 +437,6 @@
         <select id="targetPick"></select>
       </div>
       <div class="status" id="status">connecting</div>
-      <div class="section" style="margin-top:10px">Snapshot</div>
-      <div class="kpigrid" id="kpigrid">
-        <div class="kpi"><div class="v accent" id="kpiPoss">–</div><div class="k">Possession</div><div class="sub" id="kpiPossSub">home share</div></div>
-        <div class="kpi"><div class="v" id="kpiPassComp">–</div><div class="k">Pass completion</div><div class="sub" id="kpiPassCompSub">– att</div></div>
-        <div class="kpi"><div class="v" id="kpiConv">–</div><div class="k">Shot conversion</div><div class="sub" id="kpiConvSub">– shots</div></div>
-        <div class="kpi"><div class="v" id="kpiFwd">–</div><div class="k">Forward-pass share</div><div class="sub" id="kpiFwdSub">of completed</div></div>
-      </div>
-      <div class="passmix">
-        <div class="passbar" id="passbar">
-          <div class="seg" id="segFwd" style="flex-grow:1;background:var(--accent)"></div>
-          <div class="seg" id="segLat" style="flex-grow:1;background:var(--muted)"></div>
-          <div class="seg" id="segBack" style="flex-grow:1;background:var(--away)"></div>
-        </div>
-        <div class="passlegend">
-          <span class="sw"><i style="background:var(--accent)"></i>forward <b id="pmFwd">0%</b></span>
-          <span class="sw"><i style="background:var(--muted)"></i>lateral <b id="pmLat">0%</b></span>
-          <span class="sw"><i style="background:var(--away)"></i>backward <b id="pmBack">0%</b></span>
-        </div>
-      </div>
-      <div class="section" style="margin-top:2px">Learning climb · 11v11</div>
-      <div class="climb" id="climb">
-        <div class="head">
-          <div class="legend">
-            <span class="sw"><i style="border-top-color:var(--accent)"></i>control</span>
-            <span class="sw"><i style="border-top-color:var(--gold)"></i>grounded</span>
-          </div>
-          <span class="note" id="climbStatus">–</span>
-        </div>
-        <div class="climbgrid" id="climbgrid"></div>
-        <div class="note">Each learned outcome per league round — the training climb vs the analytic opponent. Goal diff / game &gt; 0 = beating analytic (parity).</div>
-      </div>
       <div id="controlPad">
         <span style="font-size:11px;color:#9fb3c8">Controlled player:</span>
         <button class="padbtn" id="padUp" title="ArrowUp">↑</button>
@@ -988,19 +898,12 @@ let playerMenuPlayerId = null;
 let lastSemanticBallAction = null;
 let stickyHolder = { id: null, team: null };
 let stickyPassTarget = { playerId: null, point: null, urgency: 0 };
-// Target gap between step starts. Matched to the backend sim timestep (1/15 s ≈ 67 ms)
-// so a real-time pulse advances EXACTLY ONE tick per frame: at 10 Hz the 1/15 s sim
-// rounded to ~2 ticks/pulse, doubling the per-frame jump and making motion look steppy.
-// One tick/frame at 15 Hz is the finest, smoothest real-time cadence (the 60 fps
-// interpolation below fills between them). Local steps are ~16 ms so 15 Hz is cheap; the
-// WS-driven deployed path pushes over a persistent socket, so the higher rate is fine.
-const LIVE_STEP_INTERVAL_MS = 67;
+const LIVE_STEP_INTERVAL_MS = 100;
 // Single fallback for the simulation timestep when a frame/config somehow omits it.
 // Mirrors the backend's one source of truth, soccer.rs `DEFAULT_DT_SECONDS` (1/15 s);
 // keep the two in sync. Normally dt comes from the backend (state.config.dtSeconds).
 const FALLBACK_DT_SECONDS = 1 / 15;
 const LIVE_DEFAULT_TICKS_PER_PULSE = 1;
-const LIVE_MAX_INTERPOLATION_FRAMES_PER_STEP = 30;
 const LIVE_INPUT_FLUSH_INTERVAL_MS = 33;
 const LIVE_INPUT_RETRY_MIN_MS = 120;
 const LIVE_INPUT_RETRY_MAX_MS = 1000;
@@ -3602,72 +3505,32 @@ function drawBall(ball, r) {
   ctx.restore();
 }
 // --- Smooth 60fps field rendering via entity interpolation -------------------
-// Server frames arrive at ~15Hz (LIVE_STEP_INTERVAL_MS) and the /api/step
+// Server frames arrive at ~10Hz (LIVE_STEP_INTERVAL_MS) and the /api/step
 // round-trip drops that further over a network, so drawing those discrete frames
 // directly is choppy. Instead a requestAnimationFrame loop draws the field at the
 // display refresh rate, lerping each entity's position between the previous and
 // latest server frame. Metrics/overlays still update per server frame in render().
-// --- Jitter-buffer playout -------------------------------------------------
-// Frames are buffered by sim tick and played back a couple of frames BEHIND the
-// most recent arrival. With a steady server push this is invisible; under jitter
-// on the last network hop (a frame arriving late/early), the playhead keeps
-// advancing smoothly and always has a "next" frame to interpolate toward, so
-// motion no longer stalls-then-snaps. Holds the latest frame on buffer underrun,
-// and restarts cleanly on a match reset (tick rewind) or a large forward seek.
-let frameBuf = [];                 // [{tick, frame}] ascending by tick, capped
-let playHeadTick = null;           // float playback position, in tick units
-let playHeadLastMs = 0;            // wall clock of the last playhead advance
-const JBUF_TARGET_TICKS = 2;       // render ~this many frames behind the latest
-const JBUF_MAX_FRAMES = 60;        // ~4s of history at 15Hz
-const JBUF_NOMINAL_MS = 1000 / 15; // sim cadence: one tick per 1/15s
-
-function jbufReset() { frameBuf = []; playHeadTick = null; }
+let interpPrevFrame = null;
+let interpTargetFrame = null;
+let interpStart = 0;
+let interpDuration = LIVE_STEP_INTERVAL_MS;
+let interpLastArrival = 0;
 
 function registerFrameForInterpolation(frame) {
   if (!frame) return;
-  const tick = Number(frame.tick);
-  if (!Number.isFinite(tick)) return;
-  const latest = frameBuf.length ? frameBuf[frameBuf.length - 1].tick : null;
-  // Match reset / rewind, or a big forward jump (seek): start the buffer fresh.
-  if (latest != null && (tick < latest || tick > latest + 30)) {
-    if (tick !== latest) jbufReset();
+  const now = performance.now();
+  if (interpTargetFrame && Number(frame.tick) === Number(interpTargetFrame.tick)) {
+    interpTargetFrame = frame; // same tick re-rendered (UI toggle); keep the lerp
+    return;
   }
-  const i = frameBuf.length ? frameBuf.findIndex(e => e.tick === tick) : -1;
-  if (i >= 0) {
-    frameBuf[i].frame = frame;                // same tick re-rendered (UI toggle)
-  } else if (frameBuf.length === 0 || tick > frameBuf[frameBuf.length - 1].tick) {
-    frameBuf.push({ tick, frame });           // common case: next tick → push to end
-  } else {
-    frameBuf.push({ tick, frame });
-    frameBuf.sort((a, b) => a.tick - b.tick);
-  }
-  while (frameBuf.length > JBUF_MAX_FRAMES) frameBuf.shift();
-}
-
-function jbufFrameAtTick(tick) {
-  for (let i = 0; i < frameBuf.length; i++) if (frameBuf[i].tick === tick) return frameBuf[i].frame;
-  return null;
-}
-
-// Advance the playhead toward (latest - JBUF_TARGET_TICKS) at the sim cadence with
-// bounded proportional catch-up (so it tracks buffer depth without jerking), and
-// return the interpolated frame to draw — or null when nothing is buffered yet.
-function jbufCurrentFrame(now) {
-  if (frameBuf.length === 0) return null;
-  const latest = frameBuf[frameBuf.length - 1].tick;
-  const oldest = frameBuf[0].tick;
-  if (playHeadTick == null) { playHeadTick = Math.max(oldest, latest - JBUF_TARGET_TICKS); playHeadLastMs = now; }
-  const dtMs = Math.min(Math.max(now - playHeadLastMs, 0), 250);
-  playHeadLastMs = now;
-  const target = latest - JBUF_TARGET_TICKS;
-  let adv = dtMs / JBUF_NOMINAL_MS;                                  // nominal 1 tick / (1/15s)
-  adv *= clamp(1 + (target - playHeadTick) * 0.5, 0.2, 2.2);         // bounded catch-up
-  playHeadTick = clamp(playHeadTick + adv, oldest, latest);          // never extrapolate past latest
-  const lo = Math.floor(playHeadTick);
-  const frac = playHeadTick - lo;
-  const a = jbufFrameAtTick(lo) || jbufFrameAtTick(Math.ceil(playHeadTick)) || frameBuf[frameBuf.length - 1].frame;
-  const b = jbufFrameAtTick(lo + 1) || a;
-  return interpolatedFrame(a, b, a === b ? 0 : frac);
+  const measured = interpLastArrival ? now - interpLastArrival : LIVE_STEP_INTERVAL_MS;
+  // EMA of the real wall-clock gap between frames -> motion paced to actual
+  // arrivals (robust to network jitter), not the nominal step interval.
+  interpDuration = clamp(0.6 * interpDuration + 0.4 * clamp(measured, 30, 1500), 30, 1500);
+  interpLastArrival = now;
+  interpPrevFrame = interpTargetFrame || frame;
+  interpTargetFrame = frame;
+  interpStart = now;
 }
 
 function lerpPosition(a, b, t) {
@@ -3832,9 +3695,12 @@ function animateField() {
   // though the sim keeps stepping server-side. Guard the draw and ALWAYS re-arm (finally), and
   // surface the error once instead of dying silently.
   try {
-    if (state) {
-      const f = jbufCurrentFrame(performance.now());
-      if (f) drawField(f, pitchRect());
+    if (state && interpTargetFrame) {
+      const r = pitchRect();
+      const t = interpDuration > 0
+        ? clamp((performance.now() - interpStart) / interpDuration, 0, 1)
+        : 1;
+      drawField(interpolatedFrame(interpPrevFrame, interpTargetFrame, t), r);
     }
   } catch (e) {
     if (typeof console !== "undefined") console.error("animateField draw error", e);
@@ -3847,59 +3713,6 @@ function animateField() {
 }
 requestAnimationFrame(animateField);
 
-// ---- design-system snapshot tiles + pass-mix bar (driven by live MatchStats) ----
-let possAccum = { home: 0, away: 0, tick: -1 };
-function setTile(id, val, cls) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = val;
-  el.className = "v" + (cls ? " " + cls : "");
-}
-function updateSnapshotTiles(s, f) {
-  if (!s || !f) return;
-  const setText = (id, text) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = text;
-  };
-  const cf = (s.passesCompletedForwardHome || 0) + (s.passesCompletedForwardAway || 0);
-  const cb = (s.passesCompletedBackwardHome || 0) + (s.passesCompletedBackwardAway || 0);
-  const cc = (s.passesCompletedHome || 0) + (s.passesCompletedAway || 0);
-  const cl = Math.max(0, cc - cf - cb);                         // lateral = completed − fwd − back
-  const att = (s.passesAttemptedHome || 0) + (s.passesAttemptedAway || 0);
-  const shotsT = (s.shotsHome || 0) + (s.shotsAway || 0);
-  const goalsT = (f.scoreHome || 0) + (f.scoreAway || 0);
-  const pct = (n, d) => d > 0 ? Math.round(100 * n / d) : 0;
-  // possession share — accumulate per tick so re-renders of the same frame don't double-count
-  const curTick = (state && state.summary && state.summary.ticks) | 0;
-  if (curTick < possAccum.tick) { possAccum.home = 0; possAccum.away = 0; }  // new match / rewind
-  if (curTick !== possAccum.tick) {
-    possAccum.tick = curTick;
-    const pt = String(livePossessionTeam(f) || "").toLowerCase();
-    if (pt.startsWith("home")) possAccum.home++;
-    else if (pt.startsWith("away")) possAccum.away++;
-  }
-  const possTot = possAccum.home + possAccum.away;
-  setTile("kpiPoss", (possTot > 0 ? Math.round(100 * possAccum.home / possTot) : 50) + "%", "accent");
-  const comp = pct(cc, att);
-  setTile("kpiPassComp", comp + "%", comp >= 80 ? "good" : "");
-  setText("kpiPassCompSub", att + " att");
-  const conv = pct(goalsT, shotsT);
-  setTile("kpiConv", conv + "%", goalsT > 0 ? "good" : "");
-  setText("kpiConvSub", shotsT + " shots · " + goalsT + " gl");
-  const total = cf + cl + cb;
-  setTile("kpiFwd", pct(cf, total) + "%", "");
-  setText("kpiFwdSub", cf + " fwd / " + cc);
-  const setSeg = (id, n) => {
-    const el = document.getElementById(id); if (!el) return;
-    const share = total > 0 ? n / total : 1 / 3;
-    el.style.flexGrow = String(Math.max(0.0001, share));
-    el.textContent = (total > 0 && share >= 0.10) ? Math.round(share * 100) + "%" : "";
-  };
-  setSeg("segFwd", cf); setSeg("segLat", cl); setSeg("segBack", cb);
-  setText("pmFwd", pct(cf, total) + "%");
-  setText("pmLat", pct(cl, total) + "%");
-  setText("pmBack", pct(cb, total) + "%");
-}
 function render() {
   maybeAutoAssignFirstController();
   if (!state) return;
@@ -3936,7 +3749,6 @@ function render() {
   gkPhysics.textContent = goalkeeperPhysicsLabel();
   gkPhysics.title = goalkeeperPhysicsTitle();
   passes.textContent = `${s.passesCompletedHome + s.passesCompletedAway} / ${s.passesAttemptedHome + s.passesAttemptedAway}`;
-  updateSnapshotTiles(s, f);
   dribbleBeats.textContent = `${s.dribbleBeatsHome ?? 0} - ${s.dribbleBeatsAway ?? 0}`;
   clearances.textContent = `${s.clearancesHome ?? 0} - ${s.clearancesAway ?? 0}`;
   routeOne.textContent = `${s.routeOneBallsHome ?? 0} - ${s.routeOneBallsAway ?? 0}`;
@@ -3998,9 +3810,7 @@ function render() {
   updateRunButton();
   episodes.innerHTML = episodeHistoryHtml();
   policyHistory.innerHTML = policyHistoryHtml();
-  events.innerHTML = eventLog.slice(-12).reverse()
-    .map(e => `<li>${escapeHtml(fmtClock(e.clockSeconds))} ${escapeHtml(e.description)}</li>`)
-    .join("");
+  events.innerHTML = eventLog.slice(-12).reverse().map(e => `<li>${fmtClock(e.clockSeconds)} ${e.description}</li>`).join("");
 }
 function humanSlotCount() {
   if (!state) return 0;
@@ -5803,12 +5613,9 @@ async function stepOnce(options = {}) {
         lastAutoPulseAt = 0; // a manual single-step breaks the wall-clock chain
       }
       try {
-        const recordEveryTicks = ticksThisPulse <= LIVE_MAX_INTERPOLATION_FRAMES_PER_STEP
-          ? 1
-          : Math.ceil(ticksThisPulse / LIVE_MAX_INTERPOLATION_FRAMES_PER_STEP);
         response = await postSoccerJson("/api/step", {
           ticks: ticksThisPulse,
-          recordEveryTicks,
+          recordEveryTicks: Math.max(1, ticksThisPulse),
           inputs
         }, "step");
       } catch (err) {
@@ -5831,10 +5638,6 @@ async function stepOnce(options = {}) {
     if (!options.injectedResponse && incomingTick + 0.5 < currentTick) {
       return;
     }
-    const responseFrames = Array.isArray(response.frames) && response.frames.length
-      ? response.frames
-      : [response.frame];
-    responseFrames.forEach(registerFrameForInterpolation);
     state = {
       config: state.config,
       frame: response.frame,
@@ -5902,7 +5705,10 @@ async function stepOnce(options = {}) {
     recentLearningTransitions = Array.isArray(response.learningTransitions)
       ? response.learningTransitions
       : [];
-    rememberSemanticBallActionsFromFrames(responseFrames);
+    const semanticFrames = Array.isArray(response.frames) && response.frames.length
+      ? response.frames
+      : [response.frame];
+    rememberSemanticBallActionsFromFrames(semanticFrames);
     rememberSemanticBallActionsFromTransitions(recentLearningTransitions);
     applyAssignmentsToFrame(state.controllerAssignments);
     if (assignmentKey(state.controllerAssignments) !== beforeAssignments) {
@@ -6068,17 +5874,7 @@ async function pauseAndAnalyze() {
   }
   const resp = await fetchLive("/api/decision-trace");
   if (!resp.ok) throw new Error("HTTP " + resp.status);
-  let payload = await resp.json();
-  if (!payload?.captureEnabled) {
-    const enableResp = await fetchLive("/api/decision-trace", { method: "POST" });
-    if (!enableResp.ok) throw new Error("HTTP " + enableResp.status);
-    const enabledPayload = await enableResp.json();
-    payload = {
-      ...(payload || {}),
-      captureEnabled: enabledPayload?.captureEnabled ?? true,
-      entries: payload?.entries || []
-    };
-  }
+  const payload = await resp.json();
   // Only overwrite the view if the refetch actually captured something, OR we had
   // nothing before — otherwise keep the prior capture (and its Copy-JSON payload).
   if ((payload?.entries?.length || 0) > 0 || !hadCapture) {
@@ -6416,124 +6212,6 @@ if (playbackSpeedSelect) {
 }
 initializeAuthTokenFromLocation();
 bootLivePage().catch(e => statusEl.textContent = e.message);
-
-// ---- learning-climb charts: 11v11 training history (goals for/against, pass completion,
-//      turnovers, shots) per league round, polled live from the climb sidecar (:5056). ----
-(function () {
-  const CLIMB_URL = `${location.protocol}//${location.hostname || "localhost"}:5056/climb.json`;
-  const ARM_VARS = { control: "--accent", grounded: "--gold" };   // arm -> css color var
-  const SPECS = [
-    { field: "gd_per_game",       label: "Goal diff / game",         fmt: v => (v >= 0 ? "+" : "") + v.toFixed(2), zero: true },
-    { field: "goals_for",         label: "Goals for",                fmt: v => String(Math.round(v)) },
-    { field: "goals_against",     label: "Goals against",            fmt: v => String(Math.round(v)) },
-    { field: "pass_completion",   label: "Pass completion",          fmt: v => (v * 100).toFixed(1) + "%" },
-    { field: "chain_net_losses",  label: "Turnovers (chain losses)", fmt: v => String(Math.round(v)) },
-    { field: "sot_for",           label: "Shots on target for",      fmt: v => String(Math.round(v)) },
-  ];
-  const cards = {};        // field -> { canvas, valEl, spec }
-  let data = null;
-  const cssVar = n => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || "#888");
-
-  function build() {
-    const grid = document.getElementById("climbgrid");
-    if (!grid) return;
-    grid.innerHTML = "";
-    for (const spec of SPECS) {
-      const card = document.createElement("div"); card.className = "climbcard";
-      const ct = document.createElement("div"); ct.className = "ct";
-      const l = document.createElement("span"); l.className = "ctl"; l.textContent = spec.label;
-      const val = document.createElement("span"); val.className = "cval"; val.textContent = "–";
-      ct.appendChild(l); ct.appendChild(val);
-      const cv = document.createElement("canvas");
-      card.appendChild(ct); card.appendChild(cv); grid.appendChild(card);
-      cards[spec.field] = { canvas: cv, valEl: val, spec };
-    }
-  }
-
-  function drawOne(field) {
-    const entry = cards[field]; if (!entry || !data) return;
-    const { canvas, valEl, spec } = entry;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = canvas.clientWidth || 280, h = canvas.clientHeight || 72;
-    canvas.width = w * dpr; canvas.height = h * dpr;
-    const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    const pad = { l: 5, r: 6, t: 7, b: 10 };
-    const order = data.arm_order || Object.keys(ARM_VARS);
-    const series = [];
-    let ymin = Infinity, ymax = -Infinity, xmax = 1;
-    for (const arm of order) {
-      const rows = (data.arms || {})[arm] || [];
-      const pts = rows.filter(r => r[field] != null && isFinite(r[field])).map(r => ({ x: r.round, y: r[field] }));
-      if (pts.length) {
-        series.push({ arm, color: cssVar(ARM_VARS[arm] || "--muted"), pts });
-        for (const p of pts) { ymin = Math.min(ymin, p.y); ymax = Math.max(ymax, p.y); xmax = Math.max(xmax, p.x); }
-      }
-    }
-    if (!series.length) { valEl.textContent = "–"; return; }
-    if (spec.zero) { ymin = Math.min(ymin, 0); ymax = Math.max(ymax, 0); }
-    if (ymin === ymax) { ymin -= 1; ymax += 1; }
-    const span = (ymax - ymin) || 1;
-    const X = x => pad.l + (x / Math.max(1, xmax)) * (w - pad.l - pad.r);
-    const Y = y => pad.t + (1 - (y - ymin) / span) * (h - pad.t - pad.b);
-    // zero baseline (dashed) where meaningful
-    if (spec.zero && ymin <= 0 && ymax >= 0) {
-      const yz = Y(0);
-      ctx.strokeStyle = cssVar("--line"); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(pad.l, yz); ctx.lineTo(w - pad.r, yz); ctx.stroke(); ctx.setLineDash([]);
-    }
-    for (const s of series) {
-      ctx.strokeStyle = s.color; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.beginPath();
-      s.pts.forEach((p, i) => { const x = X(p.x), y = Y(p.y); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-      ctx.stroke();
-      const last = s.pts[s.pts.length - 1];
-      ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(X(last.x), Y(last.y), 2.3, 0, 6.2832); ctx.fill();
-    }
-    const prim = series[0], lv = prim.pts[prim.pts.length - 1].y;
-    valEl.textContent = spec.fmt(lv);
-  }
-
-  function drawAll() { for (const f in cards) drawOne(f); }
-  window.drawAllClimb = drawAll;   // let the theme toggle redraw with fresh colors
-
-  async function update() {
-    const st = document.getElementById("climbStatus");
-    try {
-      const r = await fetch(CLIMB_URL, { cache: "no-store" });
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      data = await r.json();
-      const c = ((data.arms || {}).control || []).length, g = ((data.arms || {}).grounded || []).length;
-      if (st) st.textContent = `control r${c} · grounded r${g}`;
-      drawAll();
-    } catch (e) {
-      if (st) st.textContent = "climb sidecar offline";
-    }
-  }
-
-  build();
-  update();
-  setInterval(update, 15000);
-  let raf = 0;
-  window.addEventListener("resize", () => { if (raf) cancelAnimationFrame(raf); raf = requestAnimationFrame(drawAll); });
-})();
-
-// ---- theme toggle (light / dark, persisted) ----
-(function () {
-  const btn = document.getElementById("themeToggle");
-  const KEY = "soccerLiveTheme";
-  const root = document.documentElement;
-  function apply(t) { if (t) root.setAttribute("data-theme", t); else root.removeAttribute("data-theme"); if (typeof window.drawAllClimb === "function") window.drawAllClimb(); }
-  let cur = null;
-  try { cur = localStorage.getItem(KEY); } catch (_) {}
-  if (cur) apply(cur);
-  if (btn) btn.addEventListener("click", () => {
-    const isDark = cur ? cur === "dark"
-      : !window.matchMedia("(prefers-color-scheme: light)").matches;   // default :root is dark
-    cur = isDark ? "light" : "dark";
-    apply(cur);
-    try { localStorage.setItem(KEY, cur); } catch (_) {}
-  });
-})();
 </script>
 </body>
 </html>
