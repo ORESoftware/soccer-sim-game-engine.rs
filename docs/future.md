@@ -1,41 +1,5 @@
 # Future Work
 
-## Graph-Temporal Policy/Value Model
-
-The current neural stack is a feedforward actor/critic family over engineered
-whole-field, belief, temporal, relational, and opponent-intent features. That is
-the compatibility baseline, not the final soccer representation. The next major
-model upgrade should add a graph-temporal encoder ahead of the existing policy,
-value, specialist, and world-model heads.
-
-Target shape:
-
-- Represent the 22 players plus ball as typed nodes, with role, team, possession,
-  kinematic, stamina, and belief/confidence channels.
-- Represent passes, marking, pressure, support, cover-shadow, offside-line, and
-  ball-trajectory relationships as edges or attention biases instead of only
-  fixed scalar aggregates.
-- Add memory with a small recurrent or transformer-style belief state so the
-  policy can infer opponent intent, fatigue, decoy runs, goalkeeper commitment,
-  and recent pressing patterns from history rather than one snapshot.
-- Keep centralized-training/decentralized-execution intact: the critic may see
-  the whole field and team returns, while the runtime actor still emits one
-  player's legal action distribution.
-- Preserve the existing contracts first: `behavior_policy_probability` remains
-  the PPO/MAPPO denominator, bounded MCTS may only rerank already-legal
-  candidates, and MPC remains the physical executor/reconciler.
-
-Rollout path:
-
-- Use the existing MLP feature path as the fallback and distillation teacher.
-- Add feature-importance or ablation telemetry for the current temporal,
-  relational, belief, and whole-field blocks before replacing them.
-- Introduce a graph-temporal snapshot version behind migration gates, then A/B it
-  against the MLP baseline over fixed seeds and comparable wall-clock budgets.
-- Start with policy/value improvement; only deepen target-level search or
-  imitation/offline-RL training once the encoder is finite-safe and demonstrably
-  better than the baseline.
-
 ## Neural-Guided MCTS
 
 The live engine can use MCTS, but only in a bounded action-selection role. Full
@@ -49,8 +13,6 @@ Near-term ideas:
 
 - Add telemetry for MCTS candidate count, simulations, selected action, prior
   source, and whether MCTS changed the top neural-blend action.
-- Add explicit causality counters: net-changed executed action rate,
-  ConfidenceGated selected-candidate open rate, and selected kick-power bucket entropy.
 - Add a runtime/env override for the live MCTS budget, with hard caps preserved
   in `SoccerNeuralBlendConfig`.
 - Feed MCTS trace data into the inspector snapshot so a live debugging tool can
@@ -107,23 +69,6 @@ Candidate expansions:
   long retreat ball so short 3-5 yard resets can win without hard-banning longer
   recycling.
 
-## Action Confidence And Exploration
-
-Kick-power bucket labels are now part of the actor vocabulary, but the confidence and
-exploration story is still unfinished.
-
-Future work:
-
-- Compute ConfidenceGated trust on a coarser action key when the fine factored label fragments
-  visits, while keeping the fine label and parameter features for the neural model.
-- Sample candidate buckets with an annealed softmax or epsilon schedule, then log selected-bucket
-  entropy by family. Do not rely on `DiscretizedKickDither`; it is currently a zero-offset
-  placeholder and does not explore other buckets.
-- Add an entropy bonus or minimum-diversity guard for bucket labels during plateau phases, then
-  anneal only after held-out eval confirms that bucket ownership helps.
-- Keep any unshielded or reduced-shield training lane paired against the normal shielded lane on
-  fixed seeds, with promotion still gated by held-out play quality.
-
 ## Training Uses
 
 MCTS may be more valuable during learning than during live play. Training can use
@@ -140,11 +85,6 @@ Ideas:
   which priors and critic values drove the decision.
 - Compare learned policy improvement from plain self-play versus MCTS-augmented
   self-play over the same seeds and wall-clock budget.
-- Maintain a frozen evaluation ladder: pure analytic baseline, protected local best,
-  past checkpoints, and weaker/randomized opponents. Mirror self-play parity should never be the
-  only learning curve.
-- Add small-sided or high-event curricula when full 11v11 runs are too draw-heavy/noisy to verify
-  the credit loop quickly.
 
 ## Learned Role-Band Average-Y Models
 

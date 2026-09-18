@@ -6,9 +6,6 @@
 
 use super::*;
 
-const ADVANCE_UPFIELD_STRATEGY_MIN_CUE: f64 = 0.58;
-const ADVANCE_UPFIELD_STRATEGY_INTERRUPT_CUE: f64 = 0.74;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FlankAttackPolicy {
@@ -118,9 +115,6 @@ pub enum TeamAttackStrategy {
     /// Identify the biggest receivable pocket either in front of or behind the defensive line,
     /// then send off-ball attackers sprinting into it so the carrier has a progressive pass.
     ExploitSpace,
-    /// When the receiver/carrier has a runway, take the grass: the ball-holder carries upfield
-    /// and the whole team steps forward so the attack arrives in numbers instead of recycling.
-    AdvanceUpfield,
     CounterTransitionVertical,
     HalfSpaceComboLeft,
     HalfSpaceComboRight,
@@ -171,7 +165,7 @@ pub enum TeamAttackStrategy {
 }
 
 impl TeamAttackStrategy {
-    pub const ALL: [TeamAttackStrategy; 43] = [
+    pub const ALL: [TeamAttackStrategy; 42] = [
         TeamAttackStrategy::PullWideLeftThenCenter,
         TeamAttackStrategy::PullWideRightThenCenter,
         TeamAttackStrategy::PullWideLeftSwitchRight,
@@ -202,7 +196,6 @@ impl TeamAttackStrategy {
         TeamAttackStrategy::DirectLongDiagonalRight,
         TeamAttackStrategy::PatientPossessionProbe,
         TeamAttackStrategy::ExploitSpace,
-        TeamAttackStrategy::AdvanceUpfield,
         TeamAttackStrategy::CounterTransitionVertical,
         TeamAttackStrategy::HalfSpaceComboLeft,
         TeamAttackStrategy::HalfSpaceComboRight,
@@ -249,7 +242,6 @@ impl TeamAttackStrategy {
             TeamAttackStrategy::DirectLongDiagonalRight => "direct-long-diagonal-right",
             TeamAttackStrategy::PatientPossessionProbe => "patient-possession-probe",
             TeamAttackStrategy::ExploitSpace => "exploit-space",
-            TeamAttackStrategy::AdvanceUpfield => "advance-upfield",
             TeamAttackStrategy::CounterTransitionVertical => "counter-transition-vertical",
             TeamAttackStrategy::HalfSpaceComboLeft => "half-space-combo-left",
             TeamAttackStrategy::HalfSpaceComboRight => "half-space-combo-right",
@@ -308,7 +300,6 @@ impl TeamAttackStrategy {
             TeamAttackStrategy::DirectLongDiagonalRight => s(Center, Right, 1, 0.90),
             TeamAttackStrategy::PatientPossessionProbe => s(Center, Center, 6, 0.18),
             TeamAttackStrategy::ExploitSpace => s(Center, Center, 2, 0.72),
-            TeamAttackStrategy::AdvanceUpfield => s(Center, Center, 2, 0.78),
             TeamAttackStrategy::CounterTransitionVertical => s(Center, Center, 2, 0.85),
             TeamAttackStrategy::HalfSpaceComboLeft => s(Left, Center, 3, 0.52),
             TeamAttackStrategy::HalfSpaceComboRight => s(Right, Center, 3, 0.52),
@@ -2534,30 +2525,19 @@ impl SoccerFormationLpBrain {
         if max_players == 0 || self.last_guidance.is_empty() {
             return 0;
         }
-        let max_players = max_players.min(self.last_guidance.len());
-        let mut candidates = Vec::with_capacity(max_players);
-        for (guidance_index, guidance) in self.last_guidance.iter().enumerate() {
-            let Some(priority) = soccer_local_mpc_candidate_priority(snapshot, guidance) else {
-                continue;
-            };
-            let candidate = SoccerLocalMpcCandidate {
-                guidance_index,
-                priority,
-            };
-            if candidates.len() < max_players {
-                candidates.push(candidate);
-                continue;
-            }
-            if let Some((lowest_index, lowest)) = candidates.iter().enumerate().min_by(|a, b| {
-                a.1.priority
-                    .partial_cmp(&b.1.priority)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }) {
-                if candidate.priority > lowest.priority {
-                    candidates[lowest_index] = candidate;
-                }
-            }
-        }
+        let mut candidates = self
+            .last_guidance
+            .iter()
+            .enumerate()
+            .filter_map(|(guidance_index, guidance)| {
+                soccer_local_mpc_candidate_priority(snapshot, guidance).map(|priority| {
+                    SoccerLocalMpcCandidate {
+                        guidance_index,
+                        priority,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
         candidates.sort_by(|a, b| {
             b.priority
                 .partial_cmp(&a.priority)
@@ -2565,7 +2545,7 @@ impl SoccerFormationLpBrain {
         });
 
         let mut solved = 0usize;
-        for candidate in candidates {
+        for candidate in candidates.into_iter().take(max_players) {
             let original = self.last_guidance[candidate.guidance_index].clone();
             if let Some(refined) = soccer_local_mpc_refined_guidance(snapshot, &original) {
                 self.last_guidance[candidate.guidance_index] = refined;
@@ -2725,7 +2705,6 @@ pub(crate) fn soccer_local_mpc_planar_obstacles(
     length: f64,
 ) -> Vec<PlanarObstacle> {
     let half_dt2 = 0.5 * dt * dt;
-    let sixth_dt3 = dt * dt * dt / 6.0; // 3rd-order (jerk) term, matching predicted_ball_position
     let mut obstacles = Vec::with_capacity(snapshot.players.len().saturating_add(1));
     for other in &snapshot.players {
         if other.id == player.id {
@@ -2734,15 +2713,13 @@ pub(crate) fn soccer_local_mpc_planar_obstacles(
         let position = finite_pitch_point(other.position, width, length, player.position);
         let velocity = finite_vec2(other.velocity, Vec2::zero());
         let acceleration = finite_vec2(other.acceleration, Vec2::zero());
-        let jerk = finite_vec2(other.jerk, Vec2::zero());
         let center = finite_pitch_point(
-            position + velocity * dt + acceleration * half_dt2 + jerk * sixth_dt3,
+            position + velocity * dt + acceleration * half_dt2,
             width,
             length,
             position,
         );
-        let obstacle_velocity =
-            limit_vec2_len(velocity + acceleration * dt + jerk * half_dt2, 24.0);
+        let obstacle_velocity = limit_vec2_len(velocity + acceleration * dt, 24.0);
         let same_team = other.team == player.team;
         let holder_bonus = if snapshot.ball.holder == Some(other.id) {
             0.55
@@ -2755,34 +2732,16 @@ pub(crate) fn soccer_local_mpc_planar_obstacles(
             PlayerRole::Midfielder => 0.05,
             PlayerRole::Forward => 0.0,
         };
-        let mut radius: f64 =
-            if same_team { 1.35 } else { 1.75 } + holder_bonus + role_radius_bonus;
+        let radius = if same_team { 1.35 } else { 1.75 } + holder_bonus + role_radius_bonus;
         let kinematic_pressure = 1.0
             + velocity.len().clamp(0.0, 16.0) / 48.0
             + acceleration.len().clamp(0.0, 14.0) / 56.0;
-        let mut weight = if same_team { 7.0 } else { 12.0 } * kinematic_pressure
+        let weight = if same_team { 7.0 } else { 12.0 } * kinematic_pressure
             + if snapshot.ball.holder == Some(other.id) {
                 4.0
             } else {
                 0.0
             };
-        // HARD same-team separation floor — the MPC keep-out layer. Inflate a teammate's
-        // avoidance radius to the 4yd floor (and strengthen its weight) so the point-mass
-        // planner routes a running trajectory AROUND teammates rather than through them,
-        // keeping the plan consistent with the movement barrier + graduated penalty. Waived
-        // when BOTH players are inside an 18-yard box (legitimate goalmouth congestion). No-op
-        // (byte-identical) when the gate is off.
-        if same_team && dd_soccer_enable_same_team_separation_floor() {
-            let both_in_box = soccer_point_in_either_penalty_area(player.position, width, length)
-                && soccer_point_in_either_penalty_area(other.position, width, length);
-            if !both_in_box {
-                // Full influence radius (8yd) so the quadratic keep-out cost grows increasingly
-                // from 7→6→5→4yd, matching the graduated reward; the hard floor is the barrier.
-                radius = radius
-                    .max(SAME_TEAM_MIN_SEPARATION_YARDS + SAME_TEAM_SEPARATION_INFLUENCE_YARDS);
-                weight *= SAME_TEAM_MPC_OBSTACLE_WEIGHT_GAIN;
-            }
-        }
         obstacles.push(PlanarObstacle {
             center: [center.x, center.y],
             velocity: [obstacle_velocity.x, obstacle_velocity.y],
@@ -2794,17 +2753,13 @@ pub(crate) fn soccer_local_mpc_planar_obstacles(
     let ball_position = finite_pitch_point(snapshot.ball.position, width, length, player.position);
     let ball_velocity = finite_vec2(snapshot.ball.velocity, Vec2::zero());
     let ball_acceleration = finite_vec2(snapshot.ball.acceleration, Vec2::zero());
-    let ball_jerk = finite_vec2(snapshot.ball.jerk, Vec2::zero());
     let ball_center = finite_pitch_point(
-        ball_position + ball_velocity * dt + ball_acceleration * half_dt2 + ball_jerk * sixth_dt3,
+        ball_position + ball_velocity * dt + ball_acceleration * half_dt2,
         width,
         length,
         ball_position,
     );
-    let ball_obstacle_velocity = limit_vec2_len(
-        ball_velocity + ball_acceleration * dt + ball_jerk * half_dt2,
-        32.0,
-    );
+    let ball_obstacle_velocity = limit_vec2_len(ball_velocity + ball_acceleration * dt, 32.0);
     let ball_weight = 4.5
         + ball_velocity.len().clamp(0.0, 28.0) / 7.0
         + ball_acceleration.len().clamp(0.0, 28.0) / 14.0;
@@ -2873,7 +2828,7 @@ fn soccer_local_mpc_refined_guidance(
         + whole_field_context.position_weight_bonus;
     let vel_weight =
         1.25 + guidance.speed_match_weight * 3.0 + whole_field_context.velocity_weight_bonus;
-    let horizon = (1.5 / dt).round().clamp(8.0, 30.0) as usize;
+    let horizon = (2.25 / dt).round().clamp(8.0, 45.0) as usize;
     let obstacle_decay_per_step = 0.5_f64.powf(dt / 1.5).clamp(0.70, 1.0);
     let mut controller = PlanarPointMassMpc::new(PlanarMpcConfig {
         horizon,
@@ -2884,7 +2839,7 @@ fn soccer_local_mpc_refined_guidance(
         qf_vel: vel_weight * 2.0,
         r: 0.10,
         a_max: accel_cap,
-        iters: (horizon.saturating_mul(4)).clamp(32, 96),
+        iters: (horizon.saturating_mul(5)).clamp(48, 160),
         obstacle_decay_per_step,
     })
     .ok()?;
@@ -3497,13 +3452,6 @@ fn soccer_formation_lp_apply_strategy_profile(
                 weights.expected_goal *= 1.10;
                 weights.retention *= 1.04;
             }
-            AdvanceUpfield => {
-                weights.progression *= 1.34;
-                weights.space_occupation *= 1.28;
-                weights.expected_goal *= 1.12;
-                weights.retention *= 0.92;
-                weights.transition_risk *= 1.08;
-            }
             WingOverlapLeftCross
             | WingOverlapRightCross
             | UnderlapLeftCutback
@@ -4043,7 +3991,6 @@ fn soccer_formation_lp_anchor(
     let own_goal_y = team.other().goal_y(length);
     let home_position = finite_pitch_point(player.home_position, width, length, center);
     let home_lane = ((home_position.x - width * 0.5) / (width * 0.5)).clamp(-1.0, 1.0);
-    let spread = formation_hold_tighten_enabled();
     let directive_width = soccer_lp_clamped(directive.width_yards, 14.0, width, width * 0.62);
     let defensive_line_y = soccer_lp_clamped(
         directive.defensive_line_y,
@@ -4062,20 +4009,6 @@ fn soccer_formation_lp_anchor(
     let possession = snapshot
         .controlled_possession_team()
         .or_else(|| snapshot.possession_team());
-    // Formation spread: the legacy anchor width (`width*0.62` ≈ 50yd) collapsed the block so the
-    // eleven's home lanes mapped to only ~32yd of span — the team never held the pitch wide. Floor
-    // the anchor width near the full pitch (wider in possession) so the LP nudges players onto a
-    // genuinely spread formation; the dynamic directive can still make it wider, and the player
-    // POMDP still decides whether to take the slot.
-    if spread {
-        let floor = if possession == Some(team) {
-            width * 0.92
-        } else {
-            width * 0.80
-        };
-        let effective_width = directive_width.max(floor);
-        x = width * 0.5 + home_lane * effective_width * 0.5;
-    }
     let y = match possession {
         Some(possessing) if possessing == team => match player.role {
             PlayerRole::Goalkeeper => own_goal_y + attack_dir * 7.0,
@@ -4117,11 +4050,6 @@ fn soccer_formation_lp_anchor(
                 DEFENDER_BALL_SIDE_PULL_BONUS
             };
             pull = (pull + bonus).min(0.9);
-        }
-        // Do not collapse the spread onto the ball's lane as hard — the block shifts ball-side but
-        // keeps its width so the far side of the pitch is not vacated.
-        if spread {
-            pull *= 0.60;
         }
         x = x * (1.0 - pull) + (width * 0.5 + ball_lane_pull * width * 0.28) * pull;
         let lane_x =
@@ -5078,7 +5006,6 @@ impl CentralBrain {
             0
         };
         let ctx: u8 = ((has_ball as u8) << 3) | (third << 1) | u8::from(opp_press > 0.6);
-        let advance_upfield_cue = advance_upfield_strategy_cue(snapshot, team);
         let (directive, commitment, value) = match team {
             Team::Home => (
                 &mut self.home_directive,
@@ -5103,24 +5030,10 @@ impl CentralBrain {
                     | TeamDefenseStrategy::DoubleTeamBallCarrier
                     | TeamDefenseStrategy::ContainAndDelayCounter
             );
-        let advance_upfield_window_interrupt = has_ball
-            && commitment.set
-            && commitment.attack != TeamAttackStrategy::AdvanceUpfield
-            && advance_upfield_cue >= ADVANCE_UPFIELD_STRATEGY_INTERRUPT_CUE;
-        // The elected strategy CONTINUES until a new one is genuinely warranted — a turnover
-        // (`possession_flip`), a meaningful change of situation (`ctx` = possession phase + ball
-        // third + opponent press), or a strong interrupt cue — rather than re-electing on a fixed
-        // clock that can flip-flop a working plan. Gate off ⇒ the original time-windowed review.
-        let review_due = if strategy_persist_until_change_enabled() {
-            ctx != commitment.context
-        } else {
-            tick >= commitment.review_tick
-        };
         if !commitment.set
-            || review_due
+            || tick >= commitment.review_tick
             || possession_flip
             || defense_window_interrupt
-            || advance_upfield_window_interrupt
         {
             // Learn: credit the just-finished commitment with the field advantage it
             // gained while running (only while we held the ball — attacking value).
@@ -5136,21 +5049,11 @@ impl CentralBrain {
             // proven held one (continuity bonus), each lifted by its learned value. A
             // held strategy with high learned value resists switching (the ensemble of
             // heuristic prior + learning + hysteresis), but we never interpolate.
-            let rule_candidate =
-                if has_ball && advance_upfield_cue >= ADVANCE_UPFIELD_STRATEGY_MIN_CUE {
-                    TeamAttackStrategy::AdvanceUpfield
-                } else {
-                    directive.attack_strategy
-                };
+            let rule_candidate = directive.attack_strategy;
             let held = commitment.attack;
             let v_rule = value.get(&(ctx, rule_candidate)).copied().unwrap_or(0.0);
             let mut chosen = rule_candidate;
-            let rule_prior = if rule_candidate == TeamAttackStrategy::AdvanceUpfield {
-                STRATEGY_RULE_PRIOR + advance_upfield_cue * 0.46
-            } else {
-                STRATEGY_RULE_PRIOR
-            };
-            let mut chosen_score = rule_prior + STRATEGY_VALUE_WEIGHT * v_rule;
+            let mut chosen_score = STRATEGY_RULE_PRIOR + STRATEGY_VALUE_WEIGHT * v_rule;
             if commitment.set && rule_candidate != held {
                 let v_held = value.get(&(ctx, held)).copied().unwrap_or(0.0);
                 let held_score = STRATEGY_HELD_HYSTERESIS + STRATEGY_VALUE_WEIGHT * v_held;
@@ -5251,23 +5154,6 @@ impl CentralBrain {
                     directive.risk_tolerance = (directive.risk_tolerance + 0.10).clamp(0.2, 0.96);
                     directive.pass_priority = (directive.pass_priority * 1.1).clamp(0.5, 1.6);
                 }
-                AdvanceUpfield => {
-                    // The carrier has grass: bias the ball-holder to carry, then pull the whole
-                    // team up behind and ahead of the ball so the attack arrives in numbers.
-                    directive.carry_priority = (directive.carry_priority * 1.30).clamp(0.55, 1.70);
-                    directive.pass_priority = (directive.pass_priority * 0.92).clamp(0.50, 1.60);
-                    directive.risk_tolerance = (directive.risk_tolerance + 0.07).clamp(0.20, 0.96);
-                    directive.support_depth_yards =
-                        (directive.support_depth_yards + 5.5).clamp(8.0, 26.0);
-                    directive.width_yards = (directive.width_yards * 1.02).min(width * 0.98);
-                    let target_line_y = snapshot.ball.position.y - team.attack_dir() * 14.0;
-                    directive.defensive_line_y = if team.attack_dir() > 0.0 {
-                        directive.defensive_line_y.max(target_line_y)
-                    } else {
-                        directive.defensive_line_y.min(target_line_y)
-                    }
-                    .clamp(length * 0.08, length * 0.92);
-                }
                 WingOverlapLeftCross | WingOverlapRightCross => {
                     directive.flank_attack_policy = FlankAttackPolicy::PlayDownFlankHighCross;
                     directive.flank_overlap_run_probability = directive
@@ -5310,18 +5196,6 @@ impl CentralBrain {
                 }
                 _ => {}
             }
-        }
-        // Situational "crash the box" from the flank: when we hold the ball in the opponent's
-        // final third with it out on the touchline lanes, force an aerial-cross delivery on top
-        // of whatever maneuver the brain committed. The carrier's `flank-high-cross` bias and the
-        // off-ball box-flood both key off `flank_attack_policy.prefers_high_cross()`, so flipping
-        // this one directive switch wires the whole move while leaving the learned strategy-value
-        // credit untouched. Recomputed each tick ⇒ never compounds; a no-op when the gate is off.
-        if snapshot.flank_final_third_crash_box_active(team) {
-            directive.flank_attack_policy = FlankAttackPolicy::PlayDownFlankHighCross;
-            directive.flank_overlap_run_probability = directive
-                .flank_overlap_run_probability
-                .max(NESTED_OVERLAP_RUN_PROBABILITY);
         }
         {
             use TeamDefenseStrategy::*;
@@ -5391,54 +5265,6 @@ pub(crate) fn select_nested_sub_maneuver(
         GiveAndGoCentral
     };
     strategy_layers_can_coexist(primary.layer(), sub.layer()).then_some(sub)
-}
-
-fn advance_upfield_strategy_cue(snapshot: &WorldSnapshot, team: Team) -> f64 {
-    if !dd_soccer_advance_upfield_strategy_enabled() {
-        return 0.0;
-    }
-    let has_ball = snapshot
-        .controlled_possession_team()
-        .or_else(|| snapshot.possession_team())
-        == Some(team);
-    if !has_ball {
-        return 0.0;
-    }
-    let Some(holder_id) = snapshot.ball.holder else {
-        return 0.0;
-    };
-    let Some(holder) = snapshot
-        .players
-        .iter()
-        .find(|player| player.id == holder_id && player.team == team)
-    else {
-        return 0.0;
-    };
-
-    let holder_pos = snapshot.player_snapshot_position(holder);
-    let forward_space = snapshot.forward_dribble_space_yards(holder_id);
-    let nearest_opponent = snapshot.nearest_opponent_distance_at(team, holder_pos);
-    let pace_fit = (holder.velocity.y * team.attack_dir() / 5.5).clamp(0.0, 1.0);
-    let space_fit = ((forward_space - 6.0) / 18.0).clamp(0.0, 1.0);
-    let pressure_fit = ((nearest_opponent - 3.0) / 9.0).clamp(0.0, 1.0);
-
-    let length = snapshot.field_length.max(1.0);
-    let ball_grid_y = ((snapshot.ball.position.y / length) * 24.0)
-        .floor()
-        .clamp(0.0, 23.0);
-    let upfield_row = if team.attack_dir() > 0.0 {
-        ball_grid_y
-    } else {
-        23.0 - ball_grid_y
-    };
-    let grid_progress_fit = (upfield_row / 23.0).clamp(0.0, 1.0);
-
-    let cue = space_fit * 0.54 + pressure_fit * 0.18 + grid_progress_fit * 0.18 + pace_fit * 0.10;
-    if forward_space >= 16.0 && nearest_opponent >= 5.5 {
-        cue.max(0.76)
-    } else {
-        cue.clamp(0.0, 1.0)
-    }
 }
 
 fn central_brain_team_advantage(snapshot: &WorldSnapshot, team: Team) -> f64 {

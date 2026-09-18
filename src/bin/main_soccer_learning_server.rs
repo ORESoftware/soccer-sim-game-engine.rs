@@ -21,7 +21,6 @@ use soccer_engine::des::general::soccer::{
 };
 use soccer_engine::des::soccer_learning::{
     soccer_learning_run_score, soccer_neural_network_snapshot_fingerprint,
-    soccer_policy_active_max_fitness_regression,
     soccer_policy_version_insert_status_after_active_head,
     soccer_tactical_learning_weights_fingerprint, soccer_team_q_policies_fingerprint,
     SOCCER_POLICY_STATUS_ACTIVE,
@@ -1091,30 +1090,23 @@ fn import_server_response_to_postgres(
         .map_err(|err| invalid_data(format!("restore server learned params policy: {err}")))?;
     let generation = parent_generation.saturating_add(1);
     let latest_active_metadata = store.load_latest_active_policy_metadata(&experiment_id)?;
-    let fitness = server_response_fitness(&response.artifact);
     let insert_status = soccer_policy_version_insert_status_after_active_head(
         SOCCER_POLICY_STATUS_ACTIVE,
         parent_policy_version_id.as_deref(),
         generation,
-        fitness,
         latest_active_metadata
             .as_ref()
             .map(|metadata| metadata.id.as_str()),
         latest_active_metadata
             .as_ref()
             .map(|metadata| metadata.generation),
-        latest_active_metadata.as_ref().map(|metadata| {
-            soccer_engine::des::soccer_learning::soccer_learning_from_micros(
-                metadata.fitness_micros,
-            )
-        }),
-        soccer_policy_active_max_fitness_regression(),
     );
     let mut config = response.learned_params.config.clone();
     config.tactical_learning = response.learned_params.tactical_learning.clone();
     let run_id = env_value("SOCCER_RUN_ID").unwrap_or_else(|| "server-response".to_string());
     let version_label = postgres_import_version_label(&run_id, response.episodes);
     let policy_version_id = Uuid::new_v4().to_string();
+    let fitness = server_response_fitness(&response.artifact);
     let search_metadata = server_import_search_metadata(
         payload,
         response,
@@ -1274,15 +1266,10 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 
 fn main() {
-    let service_name = "main_soccer_learning_server";
-    let _telemetry = soccer_engine::telemetry::init_soccer_telemetry(service_name);
-    soccer_engine::telemetry::emit_process_start(service_name);
     if let Err(err) = run() {
-        soccer_engine::telemetry::emit_process_error(service_name, &err.to_string());
         eprintln!("main_soccer_learning_server: {err}");
         std::process::exit(1);
     }
-    soccer_engine::telemetry::emit_process_complete(service_name);
 }
 
 #[cfg(test)]
