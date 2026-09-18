@@ -31,26 +31,6 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const KILLER_PASS_OVER_TOP_PASS_FLIGHT_ALIASES: &[&str] = &[
-    "overtop",
-    "overhitbackfour",
-    "killerlob",
-    "killerloft",
-    "threadedlob",
-];
-pub(crate) const KILLER_PASS_OVER_TOP_DISTANCE_BINS_YARDS: [f64; 4] = [25.0, 28.0, 32.0, 35.0];
-pub(crate) const KILLER_PASS_OVER_TOP_HEIGHT_BINS_YARDS: [f64; 4] = [2.0, 3.4, 4.6, 6.0];
-pub(crate) const KILLER_PASS_OVER_TOP_LATERAL_OFFSET_BINS_YARDS: [f64; 4] = [1.0, 3.0, 5.0, 8.0];
-pub(crate) const KILLER_PASS_OVER_TOP_BACK_LINE_CLEARANCE_BINS_YARDS: [f64; 4] =
-    [0.5, 2.0, 4.0, 7.0];
-pub(crate) const KILLER_PASS_OVER_TOP_GOALKEEPER_AVOIDANCE_BINS_YARDS: [f64; 4] =
-    [2.0, 4.0, 6.0, 9.0];
-pub(crate) const KILLER_PASS_OVER_TOP_NEURAL_LATERAL_NORMALIZER_FACTOR: f64 = 2.0;
-pub(crate) const KILLER_PASS_OVER_TOP_NEURAL_BACK_LINE_CLEARANCE_NORMALIZER_YARDS: f64 = 10.0;
-pub(crate) const KILLER_PASS_OVER_TOP_NEURAL_GOALKEEPER_AVOIDANCE_NORMALIZER_YARDS: f64 = 16.0;
-pub(crate) const KILLER_PASS_OVER_TOP_PITCH_MARGIN_CAP_FACTOR: f64 = 0.45;
-pub(crate) const KILLER_PASS_OVER_TOP_NUMERIC_EPSILON: f64 = 1e-6;
-
 /// Root of the tunable-weights tree. Grouped by subsystem; each group is a
 /// plain serde struct with `#[serde(default)]` fields so a partial override
 /// only names what it changes.
@@ -71,33 +51,12 @@ pub struct Tunables {
     pub shooting: ShootingTunables,
     /// Defensive line and back-four shape thresholds.
     pub defensive_shape: DefensiveShapeTunables,
-    /// Ball-carrier anti-stutter / keep-rolling thresholds.
-    pub carrier_keep_rolling: CarrierKeepRollingTunables,
-    /// Good-dribbling knobs: touch DIRECTION weighting, touch LENGTH (how far the ball rolls per
-    /// touch), and carry SPEED (the forward-drive gait floor). Read by both the deterministic/MPC
-    /// touch-decision path and tunable from the learning store's policy overlay (the POMDP tuning
-    /// row), so dribbling can be tuned via MPC and POMDP both. See [`DribbleTuning`].
-    pub dribble: DribbleTuning,
-    /// Freshly-won possession escape burst thresholds.
-    pub fresh_possession_escape: FreshPossessionEscapeTunables,
-    /// Goalkeeper positioning shaping (resting line, alignment score, buildup
-    /// fan-out, loose-ball commit). See [`GoalkeeperTunables`].
-    pub goalkeeper: GoalkeeperTunables,
-    /// 25-35yd clipped killer-pass over the opponent back four.
-    pub killer_pass_over_top: KillerPassOverTopTunables,
     /// Fine-grid lane/row affinity used by formation, support, and retrieval.
     pub lane_affinity: LaneAffinityTunables,
     /// Centralized lane-discipline weights (12-lane grid). Read only when
     /// `DD_SOCCER_ENABLE_LANE_DISCIPLINE_V2` is set; see
     /// [`crate::des::general::soccer::lane_discipline`].
     pub lane_discipline: LaneDisciplineTunables,
-    /// Per-rank weights for stochastic top-k policy selection. Read only when
-    /// `DD_SOCCER_ENABLE_STOCHASTIC_POLICY_TOPK` is set; see
-    /// [`crate::des::general::soccer::policy_select`].
-    pub policy_selection: PolicySelectionTunables,
-    /// POMDP perception model for ball-holder head turns, shoulder checks, and
-    /// delayed 360-degree pass recognition.
-    pub pomdp_perception: PomdpPerceptionTunables,
 }
 
 impl Default for Tunables {
@@ -109,232 +68,9 @@ impl Default for Tunables {
             decision_mpc: DecisionMpcTunables::default(),
             shooting: ShootingTunables::default(),
             defensive_shape: DefensiveShapeTunables::default(),
-            carrier_keep_rolling: CarrierKeepRollingTunables::default(),
-            dribble: DribbleTuning::default(),
-            fresh_possession_escape: FreshPossessionEscapeTunables::default(),
-            goalkeeper: GoalkeeperTunables::default(),
-            killer_pass_over_top: KillerPassOverTopTunables::default(),
             lane_affinity: LaneAffinityTunables::default(),
             lane_discipline: LaneDisciplineTunables::default(),
-            policy_selection: PolicySelectionTunables::default(),
-            pomdp_perception: PomdpPerceptionTunables::default(),
         }
-    }
-}
-
-/// Ball-holder POMDP perception knobs. A carrier can see the core body-facing
-/// cone immediately, shoulder-check wider lanes, and head-scan the rest of the
-/// pitch with lower confidence plus a realistic delay.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PomdpPerceptionTunables {
-    /// Minimum bounded human reaction delay carried in the POMDP observation.
-    pub player_reaction_min_seconds: f64,
-    /// Maximum bounded human reaction delay carried in the POMDP observation.
-    pub player_reaction_max_seconds: f64,
-    /// Full body-facing vision cone, in degrees. Previously
-    /// `BALL_HOLDER_CORE_VISION_DEGREES`.
-    pub ball_holder_core_degrees: f64,
-    /// Additional degrees reachable by a quick shoulder check on either side.
-    /// Previously `BALL_HOLDER_SHOULDER_VISION_DEGREES`.
-    pub ball_holder_shoulder_degrees: f64,
-    /// Position confidence inside the core body-facing cone.
-    pub ball_holder_core_confidence: f64,
-    /// Position confidence inside shoulder-check range.
-    pub ball_holder_shoulder_confidence: f64,
-    /// Base position confidence for side head scans.
-    pub ball_holder_side_scan_confidence: f64,
-    /// Base position confidence for rear head scans.
-    pub ball_holder_rear_scan_confidence: f64,
-    /// Minimum added perception delay for non-forward head scans.
-    pub ball_holder_head_scan_min_seconds: f64,
-    /// Maximum added perception delay for non-forward head scans.
-    pub ball_holder_head_scan_max_seconds: f64,
-    /// Amount high-vision players shave from the maximum scan delay.
-    pub ball_holder_head_scan_vision_relief_seconds: f64,
-    /// Extra confidence high-vision players add while scanning side/rear lanes.
-    pub ball_holder_scan_confidence_vision_bonus: f64,
-    /// Maximum confidence for side/rear head-scan recognition.
-    pub ball_holder_scan_confidence_cap: f64,
-    /// Baseline drift risk recorded in the POMDP observation for any head scan.
-    pub ball_holder_head_scan_drift_risk_base: f64,
-    /// Extra drift risk added as the scan delay approaches its maximum.
-    pub ball_holder_head_scan_drift_risk_span: f64,
-    /// Radius for matching a perceived point against recent Kalman history.
-    pub kalman_point_match_radius_yards: f64,
-    /// Minimum history samples before the Kalman confidence bridge is trusted.
-    pub kalman_min_history_samples: usize,
-    /// Distance treated as a current-position sample rather than a prediction.
-    pub kalman_current_sample_epsilon_yards: f64,
-    /// Baseline uncertainty for stale/predicted player positions.
-    pub kalman_base_sigma_yards: f64,
-    /// Additional uncertainty per yard-per-second of target speed.
-    pub kalman_speed_sigma_per_yps: f64,
-    /// Additional uncertainty for velocity disagreement between history samples.
-    pub kalman_velocity_disagreement_sigma_yards: f64,
-    /// Confidence cap for currently visible, history-supported positions.
-    pub kalman_visible_max_confidence: f64,
-    /// Confidence cap for forward-but-not-currently-visible positions.
-    pub kalman_front_max_confidence: f64,
-    /// Confidence cap for generally occluded positions.
-    pub kalman_occluded_max_confidence: f64,
-    /// Confidence cap for ball-holder side/rear scanned but occluded positions.
-    pub kalman_ball_holder_occluded_max_confidence: f64,
-}
-
-impl Default for PomdpPerceptionTunables {
-    fn default() -> Self {
-        PomdpPerceptionTunables {
-            player_reaction_min_seconds: 0.10,
-            player_reaction_max_seconds: 0.25,
-            ball_holder_core_degrees: 100.0,
-            ball_holder_shoulder_degrees: 40.0,
-            ball_holder_core_confidence: 0.90,
-            ball_holder_shoulder_confidence: 0.70,
-            ball_holder_side_scan_confidence: 0.52,
-            ball_holder_rear_scan_confidence: 0.38,
-            ball_holder_head_scan_min_seconds: 0.75,
-            ball_holder_head_scan_max_seconds: 1.85,
-            ball_holder_head_scan_vision_relief_seconds: 0.35,
-            ball_holder_scan_confidence_vision_bonus: 0.08,
-            ball_holder_scan_confidence_cap: 0.62,
-            ball_holder_head_scan_drift_risk_base: 0.24,
-            ball_holder_head_scan_drift_risk_span: 0.42,
-            kalman_point_match_radius_yards: 0.35,
-            kalman_min_history_samples: 2,
-            kalman_current_sample_epsilon_yards: 0.15,
-            kalman_base_sigma_yards: 0.85,
-            kalman_speed_sigma_per_yps: 0.10,
-            kalman_velocity_disagreement_sigma_yards: 0.14,
-            kalman_visible_max_confidence: 0.96,
-            kalman_front_max_confidence: 0.88,
-            kalman_occluded_max_confidence: 0.68,
-            kalman_ball_holder_occluded_max_confidence: 0.58,
-        }
-    }
-}
-
-impl PomdpPerceptionTunables {
-    pub fn ball_holder_shoulder_scan_limit_degrees(&self) -> f64 {
-        self.ball_holder_core_degrees * 0.5 + self.ball_holder_shoulder_degrees
-    }
-
-    pub fn player_reaction_span_seconds(&self) -> f64 {
-        (self.player_reaction_max_seconds - self.player_reaction_min_seconds).max(f64::EPSILON)
-    }
-
-    pub fn perception_latency_upper_bound_seconds(&self) -> f64 {
-        self.player_reaction_max_seconds + self.ball_holder_head_scan_max_seconds
-    }
-}
-
-/// Per-rank weights for **stochastic top-k policy selection** (see
-/// [`crate::des::general::soccer::policy_select`]). When its gate
-/// (`DD_SOCCER_ENABLE_STOCHASTIC_POLICY_TOPK`) is on, each MDP/POMDP decision
-/// draws among its best three candidate actions with these probabilities
-/// (renormalised over however many candidates exist), or — when
-/// `boltzmann_temperature > 0` — proportional to `exp(score / temperature)` over
-/// all candidates (value-weighted). With the gate off the engine takes the
-/// deterministic argmax and these values are never read, so an unconfigured
-/// process is byte-identical to before this group existed.
-///
-/// Defaults are the requested **70 / 20 / 10** rank split with the value-weighted
-/// path off (`boltzmann_temperature = 0`).
-pub const POLICY_SELECTION_TOP_RANK_LIMIT: usize = 3;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PolicySelectionTunables {
-    /// Probability weight of committing to the **best** (rank-0) candidate.
-    pub top1_weight: f64,
-    /// Probability weight of committing to the **2nd-best** (rank-1) candidate.
-    pub top2_weight: f64,
-    /// Probability weight of committing to the **3rd-best** (rank-2) candidate.
-    pub top3_weight: f64,
-    /// Boltzmann (softmax) temperature for **value-weighted** selection, in the
-    /// same score units the ranker scores candidates in. When `> 0` *and* the
-    /// stochastic gate is on, the decision draws over **all** candidates with
-    /// probability `∝ exp(score / temperature)` instead of the fixed-by-rank
-    /// `top{1,2,3}_weight` split — so a near-tie explores readily while a runaway
-    /// best is taken almost always. A **non-positive** value (the default `0.0`)
-    /// disables this path and falls back to the rank-weighted top-k, keeping an
-    /// unconfigured process byte-identical. Smaller ⇒ greedier, larger ⇒ flatter.
-    pub boltzmann_temperature: f64,
-}
-
-impl PolicySelectionTunables {
-    pub fn rank_weights(&self) -> [f64; POLICY_SELECTION_TOP_RANK_LIMIT] {
-        [self.top1_weight, self.top2_weight, self.top3_weight]
-    }
-}
-
-impl Default for PolicySelectionTunables {
-    fn default() -> Self {
-        PolicySelectionTunables {
-            // PLATEAU-BREAK: flattened 70/20/10 -> 50/30/20 so the policy commits LESS to its
-            // current-optimal choice and explores 2nd/3rd more — with the outcome-dominant win
-            // reward, this broader search can find aggressive play the tidy local-optimum never tries.
-            top1_weight: 0.50,
-            top2_weight: 0.30,
-            top3_weight: 0.20,
-            boltzmann_temperature: 0.0,
-        }
-    }
-}
-
-impl PolicySelectionTunables {
-    /// Clamp obvious garbage to safe ranges with a warning. The selection code is
-    /// already defensive (non-positive / non-finite weights are floored, and a
-    /// non-positive / non-finite temperature falls back to the rank-weighted
-    /// split), so this only turns silent misconfiguration into a visible warning
-    /// and keeps the values in a sensible band. The per-rank weights are
-    /// renormalised at use, so any non-negative magnitude is valid.
-    fn sanitize(&mut self) {
-        let default = PolicySelectionTunables::default();
-        // Weights are renormalised at use, so any non-negative magnitude is valid
-        // (e.g. [2,1,1] == 50/25/25). Clamp only negatives/non-finite (a hard
-        // floor of 0 matches the downstream flooring of non-positive weights);
-        // warn — but keep — values above 1.0 as "that looks unusual".
-        sanitize_f64(
-            "policy_selection.top1_weight",
-            &mut self.top1_weight,
-            default.top1_weight,
-            0.0,
-            f64::MAX,
-            0.0,
-            1.0,
-        );
-        sanitize_f64(
-            "policy_selection.top2_weight",
-            &mut self.top2_weight,
-            default.top2_weight,
-            0.0,
-            f64::MAX,
-            0.0,
-            1.0,
-        );
-        sanitize_f64(
-            "policy_selection.top3_weight",
-            &mut self.top3_weight,
-            default.top3_weight,
-            0.0,
-            f64::MAX,
-            0.0,
-            1.0,
-        );
-        // Temperature: 0 disables value-weighting; negatives are meaningless
-        // (treated as disabled downstream) so clamp them up to 0. The hard upper
-        // bound only catches absurd values — a very large temperature is a valid
-        // "near-uniform exploration" choice, hence the wide sane band.
-        sanitize_f64(
-            "policy_selection.boltzmann_temperature",
-            &mut self.boltzmann_temperature,
-            default.boltzmann_temperature,
-            0.0,
-            1_000.0,
-            0.0,
-            100.0,
-        );
     }
 }
 
@@ -485,27 +221,13 @@ impl Default for FlankCrossTunables {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RewardTunables {
-    /// Compatibility/reporting copy of the fixed 500-point goal anchor. Loaded
-    /// legacy values are projected back to 500 during sanitization; subordinate
-    /// contextual rewards remain tunable.
+    /// Reward added per goal the actor's team scores this transition. Was `100.0`.
     pub goal_scored_points: f64,
     /// Penalty when conceding, for a goalkeeper or defender (heavier — it's their
     /// job to prevent it). Was `8.0`.
     pub concede_keeper_defender_penalty: f64,
     /// Penalty when conceding, for an outfield non-defender. Was `2.0`.
     pub concede_outfield_penalty: f64,
-    /// Concede penalty for a goalkeeper/defender when the **concede-symmetry rebalance** is
-    /// active (`DD_SOCCER_ENABLE_CONCEDE_SYMMETRY`). Moves the concede *stick* toward the
-    /// fixed goal *carrot* so conceding is a genuine counterweight rather than a token cost.
-    /// Unused unless the gate is on. Default `100.0` assigns the back line one fifth of the
-    /// fixed goal anchor while preserving role-sensitive blame.
-    pub concede_keeper_defender_penalty_symmetric: f64,
-    /// Concede penalty for an outfield non-defender under the concede-symmetry rebalance:
-    /// meaningful but below the back line's share (an outfielder is less responsible for a
-    /// concede, mirroring how the back line is less responsible for a goal — the goal carrot is
-    /// flat team-wide, so the concede stick keeps a role gradient). Unused unless
-    /// `DD_SOCCER_ENABLE_CONCEDE_SYMMETRY` is on. Default `60.0`.
-    pub concede_outfield_penalty_symmetric: f64,
     /// Shaping reward for easing out of a sustained teammate overlap. Was the
     /// `TEAMMATE_SPACING_OVERLAP_RELIEF_REWARD` const.
     pub teammate_overlap_relief_reward: f64,
@@ -521,40 +243,6 @@ pub struct RewardTunables {
     /// Penalty for a forced pass played under low pressure (no need to rush). Was
     /// `LOW_PRESSURE_FORCED_PASS_PENALTY_POINTS`.
     pub low_pressure_forced_pass_penalty_points: f64,
-    /// Flat penalty for giving the ball straight to the opponent (a turnover with
-    /// no intentional-long-ball exemption) from a hold in the actor's OWN half —
-    /// the most expensive giveaway, as it exposes the goal. The danger-scaled
-    /// follow-on cost (the opponent then advancing) is priced separately and
-    /// continuously by the net-Φ pitch-value term; this is the flat decision-step
-    /// price of the giveaway itself. Was the inline `3.5`.
-    pub giveaway_to_opponent_own_half_penalty: f64,
-    /// Flat penalty for giving the ball straight to the opponent from a hold in
-    /// the OPPONENT's half (less exposed than an own-half giveaway). Was the inline
-    /// `2.2`.
-    pub giveaway_to_opponent_opp_half_penalty: f64,
-    /// Flat penalty for losing the ball into a loose/contested state (no team in
-    /// settled possession after the touch) from the actor's OWN half — softer than
-    /// a clean giveaway because the ball is still up for grabs. Was the inline
-    /// `0.85`.
-    pub giveaway_to_loose_own_half_penalty: f64,
-    /// Flat penalty for losing the ball into a loose/contested state from the
-    /// OPPONENT's half. Was the inline `0.55`.
-    pub giveaway_to_loose_opp_half_penalty: f64,
-    /// Per-second magnitude of the **both-teams loose-ball contest pressure**
-    /// penalty: charged to every outfield player on BOTH teams for each tick an
-    /// unpossessed ball is left uncontested beyond the grace, so standing off a
-    /// loose ball is never free for either side. Symmetric across teams, so it
-    /// biases only the urgency of contesting, not the match outcome. Gated by
-    /// `DD_SOCCER_ENABLE_LOOSE_BALL_CONTEST_PRESSURE` (default-on).
-    pub loose_ball_uncontested_penalty_per_second: f64,
-    /// Cap (points) on the per-tick loose-ball uncontested-time penalty, so a ball
-    /// left sitting can't runaway-dominate the sparse signal.
-    pub loose_ball_uncontested_penalty_max: f64,
-    /// Reward for **winning the unclaimed/loose ball** — the actor's team takes
-    /// controlled possession of a previously-unheld ball. Scaled up the longer the
-    /// ball had gone uncontested (winning a genuinely loose ball is decisive) and
-    /// down for a teammate who forced it loose but did not personally secure it.
-    pub loose_ball_win_points: f64,
     /// Scale on the dense **territorial pitch-control × expected-threat** delta
     /// reward (see [`crate::des::general::soccer::pitch_value`]). Multiplies the
     /// net change in the acting team's controlled threat between the before/after
@@ -562,37 +250,20 @@ pub struct RewardTunables {
     /// `DD_SOCCER_ENABLE_PITCH_VALUE_REWARD`; the gate keeps an unconfigured
     /// process byte-identical to before this term existed.
     pub pitch_value_threat_delta_points: f64,
-    /// Per-step **dense shaping budget** (P4 / audit follow-up #3): the symmetric
-    /// `±` cap applied to the dense per-step reward so accreted dense shards can't
-    /// dominate the sparse match-outcome signal on a single step. Only active when
-    /// `DD_SOCCER_ENABLE_SHAPING_DISCIPLINE` is set (off ⇒ byte-identical). The
-    /// default is generous (catches pathological spikes without clipping a normal
-    /// stacked action price); tighten it in an A/B to lean on the budget harder.
-    pub dense_shaping_budget_points: f64,
 }
 
 impl Default for RewardTunables {
     fn default() -> Self {
         RewardTunables {
-            goal_scored_points: 500.0,
+            goal_scored_points: 100.0,
             concede_keeper_defender_penalty: 8.0,
             concede_outfield_penalty: 2.0,
-            concede_keeper_defender_penalty_symmetric: 100.0,
-            concede_outfield_penalty_symmetric: 60.0,
             teammate_overlap_relief_reward: 0.06,
             teammate_overlap_camp_penalty: 0.03,
             center_back_ahead_of_wingback_penalty_per_yard: 0.11,
             blocked_lane_floor_pass_penalty_points: 6.0,
             low_pressure_forced_pass_penalty_points: 1.75,
-            giveaway_to_opponent_own_half_penalty: 3.5,
-            giveaway_to_opponent_opp_half_penalty: 2.2,
-            giveaway_to_loose_own_half_penalty: 0.85,
-            giveaway_to_loose_opp_half_penalty: 0.55,
-            loose_ball_uncontested_penalty_per_second: 0.30,
-            loose_ball_uncontested_penalty_max: 1.2,
-            loose_ball_win_points: 1.5,
             pitch_value_threat_delta_points: 12.0,
-            dense_shaping_budget_points: 12.0,
         }
     }
 }
@@ -632,20 +303,6 @@ pub struct ShootingTunables {
     pub shot_block_bailout_max_probability: f64,
     pub goal_approach_carry_yards: f64,
     pub striker_hold_up_min_goal_distance_yards: f64,
-    /// Shot-trigger MDP/POMDP discipline: beyond this distance a shot is only
-    /// *volunteered* by the AI when the trigger value clears
-    /// [`Self::shot_trigger_long_range_min_value`] (an open net / stranded keeper /
-    /// live rebound). Inside it, the legacy near-goal shoot logic stands. See
-    /// `shot_decision.rs`.
-    pub shot_trigger_long_range_yards: f64,
-    /// Minimum shot-trigger value `[0,1]` for a long (`> shot_trigger_long_range_yards`)
-    /// shot to be volunteered. A covered long shot falls below it and is worked closer.
-    pub shot_trigger_long_range_min_value: f64,
-    /// Score a vetoed long shot is crushed to in the possession ranker: tiny but
-    /// non-zero so it ranks below carrying/passing while staying a LEGAL option.
-    pub shot_trigger_volunteer_floor: f64,
-    /// Execution-probability damp applied when the MPC foot choice forces the weaker foot.
-    pub shot_foot_weak_foot_execution_damp: f64,
 }
 
 impl Default for ShootingTunables {
@@ -656,10 +313,6 @@ impl Default for ShootingTunables {
             shot_block_bailout_max_probability: 0.86,
             goal_approach_carry_yards: 45.0,
             striker_hold_up_min_goal_distance_yards: 45.0,
-            shot_trigger_long_range_yards: 22.0,
-            shot_trigger_long_range_min_value: 0.25,
-            shot_trigger_volunteer_floor: 0.002,
-            shot_foot_weak_foot_execution_damp: 0.88,
         }
     }
 }
@@ -684,321 +337,11 @@ impl Default for DefensiveShapeTunables {
         DefensiveShapeTunables {
             defensive_line_max_into_opp_half_yards: 5.0,
             back_four_block_width_yards: 22.0,
-            back_four_horizontal_min_gap_yards: 6.0,
-            back_four_horizontal_max_gap_yards: 15.0,
+            back_four_horizontal_min_gap_yards: 1.5,
+            back_four_horizontal_max_gap_yards: 8.0,
             wingback_defensive_pinch_target_seconds: 3.0,
             wingback_defensive_pinch_opponent_half_margin_yards: 8.0,
             defensive_goal_side_min_yards: 1.5,
-        }
-    }
-}
-
-/// Ball-carrier keep-rolling thresholds. These govern the execution-layer guard
-/// that turns an unpressured holder's short settle target into a real carry so
-/// the carrier does not flicker walk/stop/walk while the ball would naturally
-/// keep rolling.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CarrierKeepRollingTunables {
-    pub enabled: bool,
-    pub stop_target_yards: f64,
-    pub min_opponent_distance_yards: f64,
-    pub min_space_yards: f64,
-    pub carry_target_yards: f64,
-    pub carry_min_step_yards: f64,
-    pub momentum_yps: f64,
-}
-
-impl Default for CarrierKeepRollingTunables {
-    fn default() -> Self {
-        CarrierKeepRollingTunables {
-            enabled: true,
-            stop_target_yards: 2.75,
-            min_opponent_distance_yards: 3.0,
-            min_space_yards: 5.0,
-            carry_target_yards: 4.2,
-            carry_min_step_yards: 2.25,
-            momentum_yps: 0.6,
-        }
-    }
-}
-
-/// Good-dribbling knobs grouped along the three axes the carrier controls: which DIRECTION the ball
-/// is knocked (touch angle), how far it rolls per touch (touch LENGTH), and how fast the carrier
-/// drives with it (carry SPEED / gait floor). The deterministic touch-decision path and the MPC
-/// control estimate read these, and the learning store can override them through the policy tuning
-/// overlay — so dribbling is tunable from MPC and POMDP/learned both. Defaults reproduce the prior
-/// hard-coded literals exactly (an unconfigured process is byte-identical).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DribbleTuning {
-    // --- DIRECTION: touch-angle bucket scoring in `agentic_dribble_touch_bucket_for`. ---
-    /// Weight on the MPC ball-control probability when scoring a touch direction (how much MPC
-    /// execution feasibility steers which way the ball is knocked).
-    pub direction_mpc_control_weight: f64,
-    /// Weight on the MPC QP acceleration fit in the direction score.
-    pub direction_mpc_accel_weight: f64,
-    /// Weight on the kind-appropriate angle prior in the direction score.
-    pub direction_angle_fit_weight: f64,
-    /// Open-grass scale on the forward-component reward in the direction score (a clearer lane ahead
-    /// pulls the touch more forward).
-    pub direction_forward_open_grass_scale: f64,
-    // --- LENGTH: touch distance in `dribble_touch_distance_for` (how far the ball rolls). ---
-    /// Base touch length in yards before skill/space/intent terms.
-    pub touch_length_base_yards: f64,
-    /// Yards of touch length added per unit of ball-control skill.
-    pub touch_length_control_scale: f64,
-    /// Yards of touch length added per unit of open grass ahead.
-    pub touch_length_open_grass_scale: f64,
-    /// Yards of touch length added per unit of touch intent.
-    pub touch_length_intent_scale: f64,
-    // --- SPEED: carrier forward-drive gait floor (see `carrier_forward_drive_gait_floor`). ---
-    /// An opponent at/inside this radius keeps the carrier on close control (no speed floor).
-    pub carry_tight_pressure_yards: f64,
-    /// Open forward space (yards) at/above which the carrier is floored to at least a jog.
-    pub carry_jog_space_yards: f64,
-    /// Open forward space (yards) at/above which the carrier is floored to a run.
-    pub carry_run_space_yards: f64,
-    /// Open forward space (yards) at/above which the carrier is floored to a sprint.
-    pub carry_sprint_space_yards: f64,
-    /// Above this fatigue the open-field carry floor caps at a run rather than a sprint.
-    pub carry_sprint_max_fatigue: f64,
-    /// Minimum forward component (yards) of the intended move for the carry floor to engage.
-    pub carry_min_forward_yards: f64,
-    /// Half-width (yards) of the carry lane used to measure open forward space.
-    pub carry_lane_half_width_yards: f64,
-}
-
-impl Default for DribbleTuning {
-    fn default() -> Self {
-        DribbleTuning {
-            direction_mpc_control_weight: 0.48,
-            direction_mpc_accel_weight: 0.30,
-            direction_angle_fit_weight: 1.18,
-            direction_forward_open_grass_scale: 0.68,
-            touch_length_base_yards: 0.78,
-            touch_length_control_scale: 0.86,
-            touch_length_open_grass_scale: 1.05,
-            touch_length_intent_scale: 0.52,
-            carry_tight_pressure_yards: 2.5,
-            carry_jog_space_yards: 3.0,
-            carry_run_space_yards: 9.0,
-            carry_sprint_space_yards: 18.0,
-            carry_sprint_max_fatigue: 0.80,
-            carry_min_forward_yards: 1.0,
-            carry_lane_half_width_yards: 4.0,
-        }
-    }
-}
-
-/// Fresh ball-winner pressure escape knobs. These govern the transition touch
-/// after an outfield player wins possession in a crowd: accelerate away from
-/// the nearest pressure into a landing point that gains cushion and stays clear.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FreshPossessionEscapeTunables {
-    pub enabled: bool,
-    pub fresh_seconds: f64,
-    pub min_pressure: f64,
-    pub crowded_radius_yards: f64,
-    pub crowded_min_opponents: usize,
-    pub min_forward_space_yards: f64,
-    pub target_yards: f64,
-    pub corridor_half_width_yards: f64,
-    pub min_cushion_gain_yards: f64,
-    pub min_landing_clearance_yards: f64,
-    pub initial_push_yps: f64,
-    pub decision_floor_max_probability: f64,
-}
-
-impl Default for FreshPossessionEscapeTunables {
-    fn default() -> Self {
-        FreshPossessionEscapeTunables {
-            enabled: true,
-            fresh_seconds: 0.8,
-            min_pressure: 0.55,
-            crowded_radius_yards: 6.0,
-            crowded_min_opponents: 2,
-            min_forward_space_yards: 4.0,
-            target_yards: 4.8,
-            corridor_half_width_yards: 3.0,
-            min_cushion_gain_yards: 0.85,
-            min_landing_clearance_yards: 2.2,
-            initial_push_yps: 1.45,
-            decision_floor_max_probability: 0.56,
-        }
-    }
-}
-
-/// **Goalkeeper positioning** knobs — the shaping numbers behind where the keeper
-/// rests on its ball↔goal tracking line, how its line alignment is scored, how it
-/// fans defenders out for buildup, and how confidently it commits to a loose ball.
-///
-/// These were previously bare numeric literals inside the keeper positioning
-/// functions in `world.rs` / `soccer.rs`. The defaults reproduce those historical
-/// literals exactly, so an unconfigured process is byte-identical to before this
-/// group existed; override per-field via `DD_SOCCER_TUNABLE__goalkeeper.<field>` or
-/// the Postgres tuning overlay. Hard geometry (six-yard box depth/width, leave-box
-/// confidence thresholds, line-recovery deviations) stays in the named `const`
-/// block in `soccer.rs`; this group is only the soft behavioral shaping.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct GoalkeeperTunables {
-    // --- resting line on the ball↔goal segment (goalkeeper_ball_goal_tracking_target) ---
-    /// Ball→goal distance (yds) at which an advancing ball reaches full "ball
-    /// pressure" (keeper pushed to its max forward depth). 0 at this range, 1 at the goal.
-    pub tracking_ball_pressure_reference_yards: f64,
-    /// Holder→goal-line distance (yds) at which holder pressure saturates.
-    pub tracking_holder_pressure_reference_yards: f64,
-    /// Resting depth off the goal line (yds) with no pressure.
-    pub tracking_resting_depth_yards: f64,
-    /// Extra depth (yds) added at full ball pressure.
-    pub tracking_ball_pressure_depth_gain_yards: f64,
-    /// Extra depth (yds) added at full holder pressure.
-    pub tracking_holder_pressure_depth_gain_yards: f64,
-    /// Minimum resting depth (yds) before the genome line-height shift.
-    pub tracking_min_depth_yards: f64,
-    /// Full ± span (yds) the `gk_line_height` genome shifts the resting line (0/1 vs 0.5).
-    pub tracking_line_height_depth_span_yards: f64,
-    /// Minimum resting depth (yds) after the line-height shift.
-    pub tracking_line_height_min_depth_yards: f64,
-    /// Standoff (yds) kept short of the ball so the keeper never overruns it.
-    pub tracking_ball_standoff_yards: f64,
-
-    // --- ball↔goal line ALIGNMENT score (goalkeeper_ball_goal_line_alignment_score) ---
-    /// Perpendicular off-line distance (yds) that drops the line-alignment score by 1.0.
-    pub alignment_line_distance_reference_yards: f64,
-    /// Projection overshoot past the goal/ball endpoints that drops the projection score by 1.0.
-    pub alignment_projection_reference: f64,
-    /// Distance (yds) from the ideal tracking point that drops the depth score by 1.0.
-    pub alignment_depth_reference_yards: f64,
-    /// Weight of the on-line term in the blended alignment score.
-    pub alignment_line_weight: f64,
-    /// Weight of the projection (between-the-endpoints) term.
-    pub alignment_projection_weight: f64,
-    /// Weight of the depth (distance-to-ideal) term.
-    pub alignment_depth_weight: f64,
-
-    // --- buildup fan-out lane target (goalkeeper_buildup_lane_target_for) ---
-    /// Depth (yds) off the own goal line a WIDE defender fans out to receive a short pass.
-    pub buildup_wide_defender_depth_yards: f64,
-    /// Depth (yds) off the own goal line a CENTRAL defender fans out to.
-    pub buildup_central_defender_depth_yards: f64,
-    /// Lateral probe offset (yds) used to pick the most-open in-lane buildup spot (±this, and 0).
-    pub buildup_lane_probe_offset_yards: f64,
-
-    // --- leave-six-yard confidence blend (goalkeeper_leave_six_yard_confidence_from_times) ---
-    /// Weight of goalkeeping ability in the keeper's sweep "tool" term.
-    pub leave_confidence_goalkeeping_weight: f64,
-    /// Weight of acceleration ability in the sweep tool term.
-    pub leave_confidence_acceleration_weight: f64,
-    /// Weight of perceived-position confidence in the sweep tool term.
-    pub leave_confidence_perception_weight: f64,
-    /// Weight of the race-dominance term in the overall leave confidence.
-    pub leave_confidence_dominance_weight: f64,
-    /// Weight of the keeper-tool term in the overall leave confidence.
-    pub leave_confidence_tool_weight: f64,
-
-    // --- loose-ball commit, own-ball backpass case (goalkeeper_should_commit_to_loose_ball) ---
-    /// On a ball WE last touched (can't handle), the keeper only charges out if it beats the
-    /// nearest opponent to the ball by this fraction of the opponent's arrival time.
-    pub backpass_commit_opponent_time_fraction: f64,
-    /// ...and additionally reaches it at least this many seconds before the nearest teammate.
-    pub backpass_commit_teammate_margin_seconds: f64,
-}
-
-/// Central knobs for the killer-pass variant clipped over an opponent back four:
-/// 25-35yd, ~12ft apex, and angled away from the goalkeeper. Defaults reproduce
-/// the original feature constants; override with
-/// `DD_SOCCER_TUNABLE__killer_pass_over_top.<field>` or `SOCCER_TUNABLES_JSON`.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct KillerPassOverTopTunables {
-    pub min_distance_yards: f64,
-    pub max_distance_yards: f64,
-    pub target_distance_yards: f64,
-    pub height_yards: f64,
-    pub back_line_margin_yards: f64,
-    pub lateral_offset_yards: f64,
-    pub keeper_avoid_radius_yards: f64,
-    pub lane_fit: f64,
-    pub target_line_slack_yards: f64,
-    pub side_basis_epsilon_yards: f64,
-    pub touchline_margin_yards: f64,
-    pub byline_margin_yards: f64,
-    pub target_lateral_velocity_projection_seconds: f64,
-    pub target_lateral_velocity_cap_yards: f64,
-    pub central_gap_keeper_radius_factor: f64,
-    pub secondary_lateral_offset_factor: f64,
-    pub keeper_avoidance_min_factor: f64,
-    pub fit_distance_weight: f64,
-    pub fit_angle_weight: f64,
-    pub fit_line_weight: f64,
-    pub fit_keeper_weight: f64,
-    pub fit_line_normalizer_yards: f64,
-    pub fit_keeper_normalizer_yards: f64,
-    pub score_bonus_weight: f64,
-}
-
-impl Default for KillerPassOverTopTunables {
-    fn default() -> Self {
-        KillerPassOverTopTunables {
-            min_distance_yards: 25.0,
-            max_distance_yards: 35.0,
-            target_distance_yards: 30.0,
-            height_yards: 4.0,
-            back_line_margin_yards: 2.5,
-            lateral_offset_yards: 4.5,
-            keeper_avoid_radius_yards: 5.0,
-            lane_fit: 0.72,
-            target_line_slack_yards: 6.0,
-            side_basis_epsilon_yards: 0.75,
-            touchline_margin_yards: 3.0,
-            byline_margin_yards: 2.0,
-            target_lateral_velocity_projection_seconds: 0.35,
-            target_lateral_velocity_cap_yards: 3.0,
-            central_gap_keeper_radius_factor: 0.55,
-            secondary_lateral_offset_factor: 0.45,
-            keeper_avoidance_min_factor: 0.70,
-            fit_distance_weight: 0.34,
-            fit_angle_weight: 0.18,
-            fit_line_weight: 0.26,
-            fit_keeper_weight: 0.22,
-            fit_line_normalizer_yards: 8.0,
-            fit_keeper_normalizer_yards: 10.0,
-            score_bonus_weight: 1.45,
-        }
-    }
-}
-
-impl Default for GoalkeeperTunables {
-    fn default() -> Self {
-        GoalkeeperTunables {
-            tracking_ball_pressure_reference_yards: 72.0,
-            tracking_holder_pressure_reference_yards: 42.0,
-            tracking_resting_depth_yards: 3.0,
-            tracking_ball_pressure_depth_gain_yards: 3.0,
-            tracking_holder_pressure_depth_gain_yards: 1.2,
-            tracking_min_depth_yards: 2.0,
-            tracking_line_height_depth_span_yards: 2.0,
-            tracking_line_height_min_depth_yards: 1.5,
-            tracking_ball_standoff_yards: 0.85,
-            alignment_line_distance_reference_yards: 1.0,
-            alignment_projection_reference: 0.35,
-            alignment_depth_reference_yards: 4.5,
-            alignment_line_weight: 0.82,
-            alignment_projection_weight: 0.08,
-            alignment_depth_weight: 0.10,
-            buildup_wide_defender_depth_yards: 24.0,
-            buildup_central_defender_depth_yards: 18.0,
-            buildup_lane_probe_offset_yards: 4.0,
-            leave_confidence_goalkeeping_weight: 0.72,
-            leave_confidence_acceleration_weight: 0.18,
-            leave_confidence_perception_weight: 0.10,
-            leave_confidence_dominance_weight: 0.90,
-            leave_confidence_tool_weight: 0.10,
-            backpass_commit_opponent_time_fraction: 0.65,
-            backpass_commit_teammate_margin_seconds: 0.5,
         }
     }
 }
@@ -1009,7 +352,6 @@ impl Default for GoalkeeperTunables {
 #[serde(default)]
 pub struct LaneAffinityTunables {
     pub goalkeeper_neutral_score: f64,
-    pub goalkeeper_home_lane_weight: f64,
     pub defender_lane_radius_possession: usize,
     pub defender_lane_radius_defense: usize,
     pub midfielder_lane_radius_possession: usize,
@@ -1035,7 +377,6 @@ pub struct LaneAffinityTunables {
     pub lookahead_max_seconds: f64,
     pub lane_match_span_lanes: f64,
     pub row_match_span_rows: f64,
-    pub home_lane_match_span_lanes: f64,
     pub player_predicted_lane_weight: f64,
     pub home_predicted_lane_weight: f64,
     pub player_current_lane_weight: f64,
@@ -1058,7 +399,6 @@ pub struct LaneAffinityTunables {
     pub forward_row_coherence_weight: f64,
     pub forward_flow_weight: f64,
     pub forward_field_config_weight: f64,
-    pub forward_home_lane_weight: f64,
     pub role_markov_weight: f64,
     pub role_static_fit_weight: f64,
     pub role_player_ball_weight: f64,
@@ -1066,7 +406,6 @@ pub struct LaneAffinityTunables {
     pub role_row_coherence_weight: f64,
     pub role_flow_weight: f64,
     pub role_field_config_weight: f64,
-    pub role_home_lane_weight: f64,
     pub open_space_dynamic_lane_bonus_weight: f64,
     pub movement_shape_dynamic_lane_weight: f64,
 }
@@ -1075,7 +414,6 @@ impl Default for LaneAffinityTunables {
     fn default() -> Self {
         LaneAffinityTunables {
             goalkeeper_neutral_score: 0.5,
-            goalkeeper_home_lane_weight: 0.35,
             defender_lane_radius_possession: 2,
             defender_lane_radius_defense: 1,
             midfielder_lane_radius_possession: 2,
@@ -1101,7 +439,6 @@ impl Default for LaneAffinityTunables {
             lookahead_max_seconds: 1.35,
             lane_match_span_lanes: 5.0,
             row_match_span_rows: 8.0,
-            home_lane_match_span_lanes: 3.0,
             player_predicted_lane_weight: 0.48,
             home_predicted_lane_weight: 0.34,
             player_current_lane_weight: 0.18,
@@ -1124,7 +461,6 @@ impl Default for LaneAffinityTunables {
             forward_row_coherence_weight: 0.08,
             forward_flow_weight: 0.06,
             forward_field_config_weight: 0.10,
-            forward_home_lane_weight: 0.16,
             role_markov_weight: 0.34,
             role_static_fit_weight: 0.30,
             role_player_ball_weight: 0.16,
@@ -1132,7 +468,6 @@ impl Default for LaneAffinityTunables {
             role_row_coherence_weight: 0.06,
             role_flow_weight: 0.03,
             role_field_config_weight: 0.03,
-            role_home_lane_weight: 0.20,
             open_space_dynamic_lane_bonus_weight: 1.05,
             movement_shape_dynamic_lane_weight: 0.36,
         }
@@ -1177,12 +512,7 @@ impl Tunables {
         self.decision_mpc.sanitize();
         self.shooting.sanitize();
         self.defensive_shape.sanitize();
-        self.carrier_keep_rolling.sanitize();
-        self.fresh_possession_escape.sanitize();
-        self.killer_pass_over_top.sanitize();
         self.lane_affinity.sanitize();
-        self.pomdp_perception.sanitize();
-        self.policy_selection.sanitize();
         self
     }
 
@@ -1198,476 +528,12 @@ impl Tunables {
         self.shooting.validate_strict("shooting", &mut errors);
         self.defensive_shape
             .validate_strict("defensive_shape", &mut errors);
-        self.carrier_keep_rolling
-            .validate_strict("carrier_keep_rolling", &mut errors);
-        self.fresh_possession_escape
-            .validate_strict("fresh_possession_escape", &mut errors);
-        self.killer_pass_over_top
-            .validate_strict("killer_pass_over_top", &mut errors);
         self.lane_affinity
             .validate_strict("lane_affinity", &mut errors);
-        self.pomdp_perception
-            .validate_strict("pomdp_perception", &mut errors);
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors.join("; "))
-        }
-    }
-}
-
-impl PomdpPerceptionTunables {
-    fn sanitize(&mut self) {
-        let default = PomdpPerceptionTunables::default();
-        sanitize_f64(
-            "pomdp_perception.player_reaction_min_seconds",
-            &mut self.player_reaction_min_seconds,
-            default.player_reaction_min_seconds,
-            0.0,
-            1.0,
-            0.05,
-            0.25,
-        );
-        sanitize_f64(
-            "pomdp_perception.player_reaction_max_seconds",
-            &mut self.player_reaction_max_seconds,
-            default.player_reaction_max_seconds,
-            0.0,
-            1.0,
-            0.12,
-            0.50,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_core_degrees",
-            &mut self.ball_holder_core_degrees,
-            default.ball_holder_core_degrees,
-            1.0,
-            240.0,
-            60.0,
-            160.0,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_shoulder_degrees",
-            &mut self.ball_holder_shoulder_degrees,
-            default.ball_holder_shoulder_degrees,
-            0.0,
-            140.0,
-            20.0,
-            80.0,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_core_confidence",
-            &mut self.ball_holder_core_confidence,
-            default.ball_holder_core_confidence,
-            0.0,
-            1.0,
-            0.50,
-            1.0,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_shoulder_confidence",
-            &mut self.ball_holder_shoulder_confidence,
-            default.ball_holder_shoulder_confidence,
-            0.0,
-            1.0,
-            0.35,
-            0.95,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_side_scan_confidence",
-            &mut self.ball_holder_side_scan_confidence,
-            default.ball_holder_side_scan_confidence,
-            0.0,
-            1.0,
-            0.05,
-            0.85,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_rear_scan_confidence",
-            &mut self.ball_holder_rear_scan_confidence,
-            default.ball_holder_rear_scan_confidence,
-            0.0,
-            1.0,
-            0.05,
-            0.85,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_head_scan_min_seconds",
-            &mut self.ball_holder_head_scan_min_seconds,
-            default.ball_holder_head_scan_min_seconds,
-            0.0,
-            3.0,
-            0.25,
-            1.5,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_head_scan_max_seconds",
-            &mut self.ball_holder_head_scan_max_seconds,
-            default.ball_holder_head_scan_max_seconds,
-            0.0,
-            4.0,
-            1.0,
-            2.5,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_head_scan_vision_relief_seconds",
-            &mut self.ball_holder_head_scan_vision_relief_seconds,
-            default.ball_holder_head_scan_vision_relief_seconds,
-            0.0,
-            2.0,
-            0.0,
-            0.8,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_scan_confidence_vision_bonus",
-            &mut self.ball_holder_scan_confidence_vision_bonus,
-            default.ball_holder_scan_confidence_vision_bonus,
-            0.0,
-            0.25,
-            0.0,
-            0.12,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_scan_confidence_cap",
-            &mut self.ball_holder_scan_confidence_cap,
-            default.ball_holder_scan_confidence_cap,
-            0.0,
-            1.0,
-            0.45,
-            0.80,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_head_scan_drift_risk_base",
-            &mut self.ball_holder_head_scan_drift_risk_base,
-            default.ball_holder_head_scan_drift_risk_base,
-            0.0,
-            1.0,
-            0.0,
-            0.5,
-        );
-        sanitize_f64(
-            "pomdp_perception.ball_holder_head_scan_drift_risk_span",
-            &mut self.ball_holder_head_scan_drift_risk_span,
-            default.ball_holder_head_scan_drift_risk_span,
-            0.0,
-            1.0,
-            0.10,
-            0.75,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_point_match_radius_yards",
-            &mut self.kalman_point_match_radius_yards,
-            default.kalman_point_match_radius_yards,
-            0.0,
-            5.0,
-            0.05,
-            1.0,
-        );
-        sanitize_usize(
-            "pomdp_perception.kalman_min_history_samples",
-            &mut self.kalman_min_history_samples,
-            default.kalman_min_history_samples,
-            1,
-            10,
-            2,
-            4,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_current_sample_epsilon_yards",
-            &mut self.kalman_current_sample_epsilon_yards,
-            default.kalman_current_sample_epsilon_yards,
-            0.0,
-            2.0,
-            0.02,
-            0.50,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_base_sigma_yards",
-            &mut self.kalman_base_sigma_yards,
-            default.kalman_base_sigma_yards,
-            0.01,
-            10.0,
-            0.20,
-            2.50,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_speed_sigma_per_yps",
-            &mut self.kalman_speed_sigma_per_yps,
-            default.kalman_speed_sigma_per_yps,
-            0.0,
-            2.0,
-            0.0,
-            0.50,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_velocity_disagreement_sigma_yards",
-            &mut self.kalman_velocity_disagreement_sigma_yards,
-            default.kalman_velocity_disagreement_sigma_yards,
-            0.0,
-            2.0,
-            0.0,
-            0.50,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_visible_max_confidence",
-            &mut self.kalman_visible_max_confidence,
-            default.kalman_visible_max_confidence,
-            0.0,
-            1.0,
-            0.75,
-            1.0,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_front_max_confidence",
-            &mut self.kalman_front_max_confidence,
-            default.kalman_front_max_confidence,
-            0.0,
-            1.0,
-            0.60,
-            0.98,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_occluded_max_confidence",
-            &mut self.kalman_occluded_max_confidence,
-            default.kalman_occluded_max_confidence,
-            0.0,
-            1.0,
-            0.35,
-            0.85,
-        );
-        sanitize_f64(
-            "pomdp_perception.kalman_ball_holder_occluded_max_confidence",
-            &mut self.kalman_ball_holder_occluded_max_confidence,
-            default.kalman_ball_holder_occluded_max_confidence,
-            0.0,
-            1.0,
-            0.25,
-            0.80,
-        );
-        if self.player_reaction_max_seconds < self.player_reaction_min_seconds {
-            eprintln!(
-                "soccer tunables: pomdp_perception reaction min seconds exceeded max seconds; raising max"
-            );
-            self.player_reaction_max_seconds = self.player_reaction_min_seconds;
-        }
-        if self.ball_holder_head_scan_max_seconds < self.ball_holder_head_scan_min_seconds {
-            eprintln!(
-                "soccer tunables: pomdp_perception head-scan min seconds exceeded max seconds; raising max"
-            );
-            self.ball_holder_head_scan_max_seconds = self.ball_holder_head_scan_min_seconds;
-        }
-    }
-
-    fn validate_strict(&self, prefix: &str, errors: &mut Vec<String>) {
-        validate_f64(
-            prefix,
-            "player_reaction_min_seconds",
-            self.player_reaction_min_seconds,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "player_reaction_max_seconds",
-            self.player_reaction_max_seconds,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_core_degrees",
-            self.ball_holder_core_degrees,
-            1.0,
-            240.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_shoulder_degrees",
-            self.ball_holder_shoulder_degrees,
-            0.0,
-            140.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_core_confidence",
-            self.ball_holder_core_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_shoulder_confidence",
-            self.ball_holder_shoulder_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_side_scan_confidence",
-            self.ball_holder_side_scan_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_rear_scan_confidence",
-            self.ball_holder_rear_scan_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_head_scan_min_seconds",
-            self.ball_holder_head_scan_min_seconds,
-            0.0,
-            3.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_head_scan_max_seconds",
-            self.ball_holder_head_scan_max_seconds,
-            0.0,
-            4.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_head_scan_vision_relief_seconds",
-            self.ball_holder_head_scan_vision_relief_seconds,
-            0.0,
-            2.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_scan_confidence_vision_bonus",
-            self.ball_holder_scan_confidence_vision_bonus,
-            0.0,
-            0.25,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_scan_confidence_cap",
-            self.ball_holder_scan_confidence_cap,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_head_scan_drift_risk_base",
-            self.ball_holder_head_scan_drift_risk_base,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "ball_holder_head_scan_drift_risk_span",
-            self.ball_holder_head_scan_drift_risk_span,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_point_match_radius_yards",
-            self.kalman_point_match_radius_yards,
-            0.0,
-            5.0,
-            errors,
-        );
-        validate_usize(
-            prefix,
-            "kalman_min_history_samples",
-            self.kalman_min_history_samples,
-            1,
-            10,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_current_sample_epsilon_yards",
-            self.kalman_current_sample_epsilon_yards,
-            0.0,
-            2.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_base_sigma_yards",
-            self.kalman_base_sigma_yards,
-            0.01,
-            10.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_speed_sigma_per_yps",
-            self.kalman_speed_sigma_per_yps,
-            0.0,
-            2.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_velocity_disagreement_sigma_yards",
-            self.kalman_velocity_disagreement_sigma_yards,
-            0.0,
-            2.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_visible_max_confidence",
-            self.kalman_visible_max_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_front_max_confidence",
-            self.kalman_front_max_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_occluded_max_confidence",
-            self.kalman_occluded_max_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "kalman_ball_holder_occluded_max_confidence",
-            self.kalman_ball_holder_occluded_max_confidence,
-            0.0,
-            1.0,
-            errors,
-        );
-        if self.player_reaction_max_seconds < self.player_reaction_min_seconds {
-            errors.push(format!(
-                "{prefix}.player_reaction_max_seconds < {prefix}.player_reaction_min_seconds"
-            ));
-        }
-        if self.ball_holder_head_scan_max_seconds < self.ball_holder_head_scan_min_seconds {
-            errors.push(format!(
-                "{prefix}.ball_holder_head_scan_max_seconds < {prefix}.ball_holder_head_scan_min_seconds"
-            ));
         }
     }
 }
@@ -1683,15 +549,6 @@ impl LaneAffinityTunables {
             1.0,
             0.25,
             0.75,
-        );
-        sanitize_f64(
-            "lane_affinity.goalkeeper_home_lane_weight",
-            &mut self.goalkeeper_home_lane_weight,
-            default.goalkeeper_home_lane_weight,
-            0.0,
-            1.0,
-            0.0,
-            0.70,
         );
         sanitize_usize(
             "lane_affinity.defender_lane_radius_possession",
@@ -1919,15 +776,6 @@ impl LaneAffinityTunables {
             12.0,
         );
         sanitize_f64(
-            "lane_affinity.home_lane_match_span_lanes",
-            &mut self.home_lane_match_span_lanes,
-            default.home_lane_match_span_lanes,
-            1.0,
-            12.0,
-            2.0,
-            6.0,
-        );
-        sanitize_f64(
             "lane_affinity.player_predicted_lane_weight",
             &mut self.player_predicted_lane_weight,
             default.player_predicted_lane_weight,
@@ -2126,15 +974,6 @@ impl LaneAffinityTunables {
             1.5,
         );
         sanitize_f64(
-            "lane_affinity.forward_home_lane_weight",
-            &mut self.forward_home_lane_weight,
-            default.forward_home_lane_weight,
-            0.0,
-            1.0,
-            0.0,
-            0.45,
-        );
-        sanitize_f64(
             "lane_affinity.role_markov_weight",
             &mut self.role_markov_weight,
             default.role_markov_weight,
@@ -2198,15 +1037,6 @@ impl LaneAffinityTunables {
             1.5,
         );
         sanitize_f64(
-            "lane_affinity.role_home_lane_weight",
-            &mut self.role_home_lane_weight,
-            default.role_home_lane_weight,
-            0.0,
-            1.0,
-            0.0,
-            0.55,
-        );
-        sanitize_f64(
             "lane_affinity.open_space_dynamic_lane_bonus_weight",
             &mut self.open_space_dynamic_lane_bonus_weight,
             default.open_space_dynamic_lane_bonus_weight,
@@ -2242,14 +1072,6 @@ impl LaneAffinityTunables {
             prefix,
             "goalkeeper_neutral_score",
             self.goalkeeper_neutral_score,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "goalkeeper_home_lane_weight",
-            self.goalkeeper_home_lane_weight,
             0.0,
             1.0,
             errors,
@@ -2456,14 +1278,6 @@ impl LaneAffinityTunables {
         );
         validate_f64(
             prefix,
-            "home_lane_match_span_lanes",
-            self.home_lane_match_span_lanes,
-            1.0,
-            12.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
             "player_predicted_lane_weight",
             self.player_predicted_lane_weight,
             0.0,
@@ -2640,14 +1454,6 @@ impl LaneAffinityTunables {
         );
         validate_f64(
             prefix,
-            "forward_home_lane_weight",
-            self.forward_home_lane_weight,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
             "role_markov_weight",
             self.role_markov_weight,
             0.0,
@@ -2700,14 +1506,6 @@ impl LaneAffinityTunables {
             self.role_field_config_weight,
             0.0,
             5.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "role_home_lane_weight",
-            self.role_home_lane_weight,
-            0.0,
-            1.0,
             errors,
         );
         validate_f64(
@@ -2959,10 +1757,10 @@ impl RewardTunables {
             "reward.goal_scored_points",
             &mut self.goal_scored_points,
             default.goal_scored_points,
-            500.0,
-            500.0,
-            500.0,
-            500.0,
+            -1000.0,
+            1000.0,
+            0.0,
+            250.0,
         );
         sanitize_f64(
             "reward.concede_keeper_defender_penalty",
@@ -2981,24 +1779,6 @@ impl RewardTunables {
             200.0,
             0.0,
             25.0,
-        );
-        sanitize_f64(
-            "reward.concede_keeper_defender_penalty_symmetric",
-            &mut self.concede_keeper_defender_penalty_symmetric,
-            default.concede_keeper_defender_penalty_symmetric,
-            0.0,
-            250.0,
-            0.0,
-            150.0,
-        );
-        sanitize_f64(
-            "reward.concede_outfield_penalty_symmetric",
-            &mut self.concede_outfield_penalty_symmetric,
-            default.concede_outfield_penalty_symmetric,
-            0.0,
-            250.0,
-            0.0,
-            150.0,
         );
         sanitize_f64(
             "reward.teammate_overlap_relief_reward",
@@ -3046,69 +1826,6 @@ impl RewardTunables {
             25.0,
         );
         sanitize_f64(
-            "reward.giveaway_to_opponent_own_half_penalty",
-            &mut self.giveaway_to_opponent_own_half_penalty,
-            default.giveaway_to_opponent_own_half_penalty,
-            0.0,
-            200.0,
-            0.0,
-            25.0,
-        );
-        sanitize_f64(
-            "reward.giveaway_to_opponent_opp_half_penalty",
-            &mut self.giveaway_to_opponent_opp_half_penalty,
-            default.giveaway_to_opponent_opp_half_penalty,
-            0.0,
-            200.0,
-            0.0,
-            25.0,
-        );
-        sanitize_f64(
-            "reward.giveaway_to_loose_own_half_penalty",
-            &mut self.giveaway_to_loose_own_half_penalty,
-            default.giveaway_to_loose_own_half_penalty,
-            0.0,
-            200.0,
-            0.0,
-            25.0,
-        );
-        sanitize_f64(
-            "reward.giveaway_to_loose_opp_half_penalty",
-            &mut self.giveaway_to_loose_opp_half_penalty,
-            default.giveaway_to_loose_opp_half_penalty,
-            0.0,
-            200.0,
-            0.0,
-            25.0,
-        );
-        sanitize_f64(
-            "reward.loose_ball_uncontested_penalty_per_second",
-            &mut self.loose_ball_uncontested_penalty_per_second,
-            default.loose_ball_uncontested_penalty_per_second,
-            0.0,
-            50.0,
-            0.0,
-            10.0,
-        );
-        sanitize_f64(
-            "reward.loose_ball_uncontested_penalty_max",
-            &mut self.loose_ball_uncontested_penalty_max,
-            default.loose_ball_uncontested_penalty_max,
-            0.0,
-            100.0,
-            0.0,
-            20.0,
-        );
-        sanitize_f64(
-            "reward.loose_ball_win_points",
-            &mut self.loose_ball_win_points,
-            default.loose_ball_win_points,
-            0.0,
-            200.0,
-            0.0,
-            25.0,
-        );
-        sanitize_f64(
             "reward.pitch_value_threat_delta_points",
             &mut self.pitch_value_threat_delta_points,
             default.pitch_value_threat_delta_points,
@@ -3117,15 +1834,6 @@ impl RewardTunables {
             0.0,
             60.0,
         );
-        sanitize_f64(
-            "reward.dense_shaping_budget_points",
-            &mut self.dense_shaping_budget_points,
-            default.dense_shaping_budget_points,
-            0.0,
-            1000.0,
-            0.0,
-            200.0,
-        );
     }
 
     fn validate_strict(&self, prefix: &str, errors: &mut Vec<String>) {
@@ -3133,8 +1841,8 @@ impl RewardTunables {
             prefix,
             "goal_scored_points",
             self.goal_scored_points,
-            500.0,
-            500.0,
+            -1000.0,
+            1000.0,
             errors,
         );
         validate_f64(
@@ -3195,74 +1903,10 @@ impl RewardTunables {
         );
         validate_f64(
             prefix,
-            "giveaway_to_opponent_own_half_penalty",
-            self.giveaway_to_opponent_own_half_penalty,
-            0.0,
-            200.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "giveaway_to_opponent_opp_half_penalty",
-            self.giveaway_to_opponent_opp_half_penalty,
-            0.0,
-            200.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "giveaway_to_loose_own_half_penalty",
-            self.giveaway_to_loose_own_half_penalty,
-            0.0,
-            200.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "giveaway_to_loose_opp_half_penalty",
-            self.giveaway_to_loose_opp_half_penalty,
-            0.0,
-            200.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "loose_ball_uncontested_penalty_per_second",
-            self.loose_ball_uncontested_penalty_per_second,
-            0.0,
-            50.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "loose_ball_uncontested_penalty_max",
-            self.loose_ball_uncontested_penalty_max,
-            0.0,
-            100.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "loose_ball_win_points",
-            self.loose_ball_win_points,
-            0.0,
-            200.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
             "pitch_value_threat_delta_points",
             self.pitch_value_threat_delta_points,
             0.0,
             500.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "dense_shaping_budget_points",
-            self.dense_shaping_budget_points,
-            0.0,
-            1000.0,
             errors,
         );
     }
@@ -3410,42 +2054,6 @@ impl ShootingTunables {
             15.0,
             80.0,
         );
-        sanitize_f64(
-            "shooting.shot_trigger_long_range_yards",
-            &mut self.shot_trigger_long_range_yards,
-            default.shot_trigger_long_range_yards,
-            1.0,
-            40.0,
-            12.0,
-            35.0,
-        );
-        sanitize_f64(
-            "shooting.shot_trigger_long_range_min_value",
-            &mut self.shot_trigger_long_range_min_value,
-            default.shot_trigger_long_range_min_value,
-            0.0,
-            1.0,
-            0.0,
-            0.9,
-        );
-        sanitize_f64(
-            "shooting.shot_trigger_volunteer_floor",
-            &mut self.shot_trigger_volunteer_floor,
-            default.shot_trigger_volunteer_floor,
-            0.0,
-            1.0,
-            0.0,
-            0.5,
-        );
-        sanitize_f64(
-            "shooting.shot_foot_weak_foot_execution_damp",
-            &mut self.shot_foot_weak_foot_execution_damp,
-            default.shot_foot_weak_foot_execution_damp,
-            0.0,
-            1.0,
-            0.5,
-            1.0,
-        );
     }
 
     fn validate_strict(&self, prefix: &str, errors: &mut Vec<String>) {
@@ -3487,38 +2095,6 @@ impl ShootingTunables {
             self.striker_hold_up_min_goal_distance_yards,
             1.0,
             120.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "shot_trigger_long_range_yards",
-            self.shot_trigger_long_range_yards,
-            1.0,
-            40.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "shot_trigger_long_range_min_value",
-            self.shot_trigger_long_range_min_value,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "shot_trigger_volunteer_floor",
-            self.shot_trigger_volunteer_floor,
-            0.0,
-            1.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "shot_foot_weak_foot_execution_damp",
-            self.shot_foot_weak_foot_execution_damp,
-            0.0,
-            1.0,
             errors,
         );
     }
@@ -3660,463 +2236,6 @@ impl DefensiveShapeTunables {
         );
         if self.back_four_horizontal_min_gap_yards > self.back_four_horizontal_max_gap_yards {
             errors.push(format!("{prefix}.back_four_horizontal_min_gap_yards > {prefix}.back_four_horizontal_max_gap_yards"));
-        }
-    }
-}
-
-impl CarrierKeepRollingTunables {
-    fn sanitize(&mut self) {
-        let default = CarrierKeepRollingTunables::default();
-        sanitize_f64(
-            "carrier_keep_rolling.stop_target_yards",
-            &mut self.stop_target_yards,
-            default.stop_target_yards,
-            0.0,
-            6.0,
-            0.5,
-            3.25,
-        );
-        sanitize_f64(
-            "carrier_keep_rolling.min_opponent_distance_yards",
-            &mut self.min_opponent_distance_yards,
-            default.min_opponent_distance_yards,
-            0.0,
-            15.0,
-            2.0,
-            6.0,
-        );
-        sanitize_f64(
-            "carrier_keep_rolling.min_space_yards",
-            &mut self.min_space_yards,
-            default.min_space_yards,
-            0.0,
-            40.0,
-            3.0,
-            12.0,
-        );
-        sanitize_f64(
-            "carrier_keep_rolling.carry_target_yards",
-            &mut self.carry_target_yards,
-            default.carry_target_yards,
-            0.5,
-            25.0,
-            2.0,
-            8.0,
-        );
-        sanitize_f64(
-            "carrier_keep_rolling.carry_min_step_yards",
-            &mut self.carry_min_step_yards,
-            default.carry_min_step_yards,
-            0.0,
-            12.0,
-            1.0,
-            5.0,
-        );
-        sanitize_f64(
-            "carrier_keep_rolling.momentum_yps",
-            &mut self.momentum_yps,
-            default.momentum_yps,
-            0.0,
-            12.0,
-            0.2,
-            3.0,
-        );
-        if self.carry_min_step_yards > self.carry_target_yards {
-            eprintln!(
-                "soccer tunables: carrier_keep_rolling min step exceeded target; clamping min step"
-            );
-            self.carry_min_step_yards = self.carry_target_yards;
-        }
-        if self.min_space_yards < self.carry_min_step_yards {
-            eprintln!(
-                "soccer tunables: carrier_keep_rolling min space below min step; raising min space"
-            );
-            self.min_space_yards = self.carry_min_step_yards;
-        }
-    }
-
-    fn validate_strict(&self, prefix: &str, errors: &mut Vec<String>) {
-        validate_f64(
-            prefix,
-            "stop_target_yards",
-            self.stop_target_yards,
-            0.0,
-            6.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "min_opponent_distance_yards",
-            self.min_opponent_distance_yards,
-            0.0,
-            15.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "min_space_yards",
-            self.min_space_yards,
-            0.0,
-            40.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "carry_target_yards",
-            self.carry_target_yards,
-            0.5,
-            25.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "carry_min_step_yards",
-            self.carry_min_step_yards,
-            0.0,
-            12.0,
-            errors,
-        );
-        validate_f64(prefix, "momentum_yps", self.momentum_yps, 0.0, 12.0, errors);
-        if self.carry_min_step_yards > self.carry_target_yards {
-            errors.push(format!(
-                "{prefix}.carry_min_step_yards > {prefix}.carry_target_yards"
-            ));
-        }
-        if self.min_space_yards < self.carry_min_step_yards {
-            errors.push(format!(
-                "{prefix}.min_space_yards < {prefix}.carry_min_step_yards"
-            ));
-        }
-    }
-}
-
-impl FreshPossessionEscapeTunables {
-    fn sanitize(&mut self) {
-        let default = FreshPossessionEscapeTunables::default();
-        sanitize_f64(
-            "fresh_possession_escape.fresh_seconds",
-            &mut self.fresh_seconds,
-            default.fresh_seconds,
-            0.0,
-            5.0,
-            0.2,
-            1.5,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.min_pressure",
-            &mut self.min_pressure,
-            default.min_pressure,
-            0.0,
-            1.0,
-            0.25,
-            0.80,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.crowded_radius_yards",
-            &mut self.crowded_radius_yards,
-            default.crowded_radius_yards,
-            0.0,
-            20.0,
-            3.0,
-            10.0,
-        );
-        sanitize_usize(
-            "fresh_possession_escape.crowded_min_opponents",
-            &mut self.crowded_min_opponents,
-            default.crowded_min_opponents,
-            0,
-            8,
-            1,
-            4,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.min_forward_space_yards",
-            &mut self.min_forward_space_yards,
-            default.min_forward_space_yards,
-            0.0,
-            20.0,
-            2.0,
-            8.0,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.target_yards",
-            &mut self.target_yards,
-            default.target_yards,
-            0.5,
-            12.0,
-            2.5,
-            7.0,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.corridor_half_width_yards",
-            &mut self.corridor_half_width_yards,
-            default.corridor_half_width_yards,
-            0.5,
-            8.0,
-            1.5,
-            4.5,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.min_cushion_gain_yards",
-            &mut self.min_cushion_gain_yards,
-            default.min_cushion_gain_yards,
-            0.0,
-            4.0,
-            0.4,
-            1.8,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.min_landing_clearance_yards",
-            &mut self.min_landing_clearance_yards,
-            default.min_landing_clearance_yards,
-            0.0,
-            8.0,
-            1.2,
-            4.0,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.initial_push_yps",
-            &mut self.initial_push_yps,
-            default.initial_push_yps,
-            0.0,
-            8.0,
-            0.5,
-            3.5,
-        );
-        sanitize_f64(
-            "fresh_possession_escape.decision_floor_max_probability",
-            &mut self.decision_floor_max_probability,
-            default.decision_floor_max_probability,
-            0.0,
-            1.0,
-            0.20,
-            0.75,
-        );
-        if self.target_yards < self.min_cushion_gain_yards {
-            eprintln!(
-                "soccer tunables: fresh_possession_escape target below cushion gain; raising target"
-            );
-            self.target_yards = self.min_cushion_gain_yards;
-        }
-    }
-
-    fn validate_strict(&self, prefix: &str, errors: &mut Vec<String>) {
-        validate_f64(
-            prefix,
-            "fresh_seconds",
-            self.fresh_seconds,
-            0.0,
-            5.0,
-            errors,
-        );
-        validate_f64(prefix, "min_pressure", self.min_pressure, 0.0, 1.0, errors);
-        validate_f64(
-            prefix,
-            "crowded_radius_yards",
-            self.crowded_radius_yards,
-            0.0,
-            20.0,
-            errors,
-        );
-        validate_usize(
-            prefix,
-            "crowded_min_opponents",
-            self.crowded_min_opponents,
-            0,
-            8,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "min_forward_space_yards",
-            self.min_forward_space_yards,
-            0.0,
-            20.0,
-            errors,
-        );
-        validate_f64(prefix, "target_yards", self.target_yards, 0.5, 12.0, errors);
-        validate_f64(
-            prefix,
-            "corridor_half_width_yards",
-            self.corridor_half_width_yards,
-            0.5,
-            8.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "min_cushion_gain_yards",
-            self.min_cushion_gain_yards,
-            0.0,
-            4.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "min_landing_clearance_yards",
-            self.min_landing_clearance_yards,
-            0.0,
-            8.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "initial_push_yps",
-            self.initial_push_yps,
-            0.0,
-            8.0,
-            errors,
-        );
-        validate_f64(
-            prefix,
-            "decision_floor_max_probability",
-            self.decision_floor_max_probability,
-            0.0,
-            1.0,
-            errors,
-        );
-        if self.target_yards < self.min_cushion_gain_yards {
-            errors.push(format!(
-                "{prefix}.target_yards < {prefix}.min_cushion_gain_yards"
-            ));
-        }
-    }
-}
-
-impl KillerPassOverTopTunables {
-    fn sanitize(&mut self) {
-        let default = KillerPassOverTopTunables::default();
-        macro_rules! sanitize_field {
-            ($field:ident, $hard_min:expr, $hard_max:expr, $sane_min:expr, $sane_max:expr) => {
-                sanitize_f64(
-                    concat!("killer_pass_over_top.", stringify!($field)),
-                    &mut self.$field,
-                    default.$field,
-                    $hard_min,
-                    $hard_max,
-                    $sane_min,
-                    $sane_max,
-                );
-            };
-        }
-
-        sanitize_field!(min_distance_yards, 5.0, 60.0, 18.0, 32.0);
-        sanitize_field!(max_distance_yards, 10.0, 80.0, 30.0, 45.0);
-        sanitize_field!(target_distance_yards, 5.0, 80.0, 25.0, 35.0);
-        sanitize_field!(height_yards, 0.5, 12.0, 3.0, 6.0);
-        sanitize_field!(back_line_margin_yards, 0.0, 10.0, 1.5, 5.0);
-        sanitize_field!(lateral_offset_yards, 0.0, 15.0, 2.0, 7.0);
-        sanitize_field!(keeper_avoid_radius_yards, 0.0, 20.0, 3.0, 8.0);
-        sanitize_field!(lane_fit, 0.0, 1.0, 0.45, 0.90);
-        sanitize_field!(target_line_slack_yards, 0.0, 20.0, 3.0, 9.0);
-        sanitize_field!(side_basis_epsilon_yards, 0.05, 5.0, 0.25, 1.5);
-        sanitize_field!(touchline_margin_yards, 0.5, 12.0, 2.0, 5.0);
-        sanitize_field!(byline_margin_yards, 0.5, 12.0, 1.5, 5.0);
-        sanitize_field!(
-            target_lateral_velocity_projection_seconds,
-            0.0,
-            2.0,
-            0.15,
-            0.70
-        );
-        sanitize_field!(target_lateral_velocity_cap_yards, 0.0, 12.0, 1.0, 5.0);
-        sanitize_field!(central_gap_keeper_radius_factor, 0.0, 2.0, 0.25, 0.85);
-        sanitize_field!(secondary_lateral_offset_factor, 0.0, 1.0, 0.25, 0.65);
-        sanitize_field!(keeper_avoidance_min_factor, 0.0, 1.0, 0.55, 0.85);
-        sanitize_field!(fit_distance_weight, 0.0, 1.0, 0.05, 0.55);
-        sanitize_field!(fit_angle_weight, 0.0, 1.0, 0.05, 0.40);
-        sanitize_field!(fit_line_weight, 0.0, 1.0, 0.05, 0.50);
-        sanitize_field!(fit_keeper_weight, 0.0, 1.0, 0.05, 0.45);
-        sanitize_field!(fit_line_normalizer_yards, 0.5, 40.0, 5.0, 16.0);
-        sanitize_field!(fit_keeper_normalizer_yards, 0.5, 40.0, 6.0, 18.0);
-        sanitize_field!(score_bonus_weight, 0.0, 5.0, 0.5, 2.5);
-
-        if self.min_distance_yards > self.max_distance_yards {
-            eprintln!("soccer tunables: killer_pass_over_top min distance exceeded max; swapping");
-            std::mem::swap(&mut self.min_distance_yards, &mut self.max_distance_yards);
-        }
-        if self.target_distance_yards < self.min_distance_yards
-            || self.target_distance_yards > self.max_distance_yards
-        {
-            eprintln!(
-                "soccer tunables: killer_pass_over_top target distance outside min/max; clamping"
-            );
-            self.target_distance_yards = self
-                .target_distance_yards
-                .clamp(self.min_distance_yards, self.max_distance_yards);
-        }
-        let fit_weight_sum = self.fit_distance_weight
-            + self.fit_angle_weight
-            + self.fit_line_weight
-            + self.fit_keeper_weight;
-        if fit_weight_sum <= 1e-9 {
-            eprintln!(
-                "soccer tunables: killer_pass_over_top fit weights sum to zero; using defaults"
-            );
-            self.fit_distance_weight = default.fit_distance_weight;
-            self.fit_angle_weight = default.fit_angle_weight;
-            self.fit_line_weight = default.fit_line_weight;
-            self.fit_keeper_weight = default.fit_keeper_weight;
-        }
-    }
-
-    fn validate_strict(&self, prefix: &str, errors: &mut Vec<String>) {
-        macro_rules! validate_field {
-            ($field:ident, $hard_min:expr, $hard_max:expr) => {
-                validate_f64(
-                    prefix,
-                    stringify!($field),
-                    self.$field,
-                    $hard_min,
-                    $hard_max,
-                    errors,
-                );
-            };
-        }
-
-        validate_field!(min_distance_yards, 5.0, 60.0);
-        validate_field!(max_distance_yards, 10.0, 80.0);
-        validate_field!(target_distance_yards, 5.0, 80.0);
-        validate_field!(height_yards, 0.5, 12.0);
-        validate_field!(back_line_margin_yards, 0.0, 10.0);
-        validate_field!(lateral_offset_yards, 0.0, 15.0);
-        validate_field!(keeper_avoid_radius_yards, 0.0, 20.0);
-        validate_field!(lane_fit, 0.0, 1.0);
-        validate_field!(target_line_slack_yards, 0.0, 20.0);
-        validate_field!(side_basis_epsilon_yards, 0.05, 5.0);
-        validate_field!(touchline_margin_yards, 0.5, 12.0);
-        validate_field!(byline_margin_yards, 0.5, 12.0);
-        validate_field!(target_lateral_velocity_projection_seconds, 0.0, 2.0);
-        validate_field!(target_lateral_velocity_cap_yards, 0.0, 12.0);
-        validate_field!(central_gap_keeper_radius_factor, 0.0, 2.0);
-        validate_field!(secondary_lateral_offset_factor, 0.0, 1.0);
-        validate_field!(keeper_avoidance_min_factor, 0.0, 1.0);
-        validate_field!(fit_distance_weight, 0.0, 1.0);
-        validate_field!(fit_angle_weight, 0.0, 1.0);
-        validate_field!(fit_line_weight, 0.0, 1.0);
-        validate_field!(fit_keeper_weight, 0.0, 1.0);
-        validate_field!(fit_line_normalizer_yards, 0.5, 40.0);
-        validate_field!(fit_keeper_normalizer_yards, 0.5, 40.0);
-        validate_field!(score_bonus_weight, 0.0, 5.0);
-
-        if self.min_distance_yards > self.max_distance_yards {
-            errors.push(format!(
-                "{prefix}.min_distance_yards > {prefix}.max_distance_yards"
-            ));
-        }
-        if self.target_distance_yards < self.min_distance_yards
-            || self.target_distance_yards > self.max_distance_yards
-        {
-            errors.push(format!(
-                "{prefix}.target_distance_yards outside {prefix}.min_distance_yards..={prefix}.max_distance_yards"
-            ));
-        }
-        let fit_weight_sum = self.fit_distance_weight
-            + self.fit_angle_weight
-            + self.fit_line_weight
-            + self.fit_keeper_weight;
-        if fit_weight_sum <= 1e-9 {
-            errors.push(format!("{prefix}.fit weights sum to zero"));
         }
     }
 }
@@ -4305,55 +2424,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn reward_giveaway_penalty_defaults_match_historical_literals() {
-        // The four flat turnover-penalty magnitudes were bare literals in
-        // `dense_soccer_transition_reward` before extraction; defaults must
-        // reproduce them exactly so the training baseline stays byte-identical.
-        let r = RewardTunables::default();
-        assert_eq!(r.giveaway_to_opponent_own_half_penalty, 3.5);
-        assert_eq!(r.giveaway_to_opponent_opp_half_penalty, 2.2);
-        assert_eq!(r.giveaway_to_loose_own_half_penalty, 0.85);
-        assert_eq!(r.giveaway_to_loose_opp_half_penalty, 0.55);
-        // The ordering the turnover model encodes: an own-half giveaway straight to
-        // the opponent is the most expensive; a loose ball lost in the opponent's
-        // half the least. Locking it in stops a future retune from inverting it.
-        assert!(r.giveaway_to_opponent_own_half_penalty > r.giveaway_to_opponent_opp_half_penalty);
-        assert!(r.giveaway_to_opponent_opp_half_penalty > r.giveaway_to_loose_own_half_penalty);
-        assert!(r.giveaway_to_loose_own_half_penalty > r.giveaway_to_loose_opp_half_penalty);
-    }
-
-    #[test]
-    fn reward_giveaway_penalties_are_sanitized_and_validated() {
-        // Defaults pass through sanitize untouched and validate cleanly.
-        let mut r = RewardTunables::default();
-        r.sanitize();
-        assert_eq!(r.giveaway_to_opponent_own_half_penalty, 3.5);
-        assert_eq!(r.giveaway_to_loose_opp_half_penalty, 0.55);
-        let mut errors = Vec::new();
-        r.validate_strict("reward", &mut errors);
-        assert!(
-            errors.is_empty(),
-            "default reward tunables must validate: {errors:?}"
-        );
-
-        // A degenerate config can never inject a non-finite or wild penalty into a
-        // gradient: non-finite is repaired to the default, out-of-range is clamped
-        // to the hard bound.
-        let mut bad = RewardTunables::default();
-        bad.giveaway_to_opponent_own_half_penalty = f64::NAN;
-        bad.giveaway_to_loose_opp_half_penalty = 10_000.0;
-        bad.sanitize();
-        assert_eq!(
-            bad.giveaway_to_opponent_own_half_penalty, 3.5,
-            "NaN -> default"
-        );
-        assert_eq!(
-            bad.giveaway_to_loose_opp_half_penalty, 200.0,
-            "out-of-range -> hard cap"
-        );
-    }
-
-    #[test]
     fn defaults_match_historical_literals() {
         let t = Tunables::default();
         assert_eq!(t.tracking.moved_dt_multiplier, 1.2);
@@ -4376,8 +2446,8 @@ mod tests {
             5.0
         );
         assert_eq!(t.defensive_shape.back_four_block_width_yards, 22.0);
-        assert_eq!(t.defensive_shape.back_four_horizontal_min_gap_yards, 6.0);
-        assert_eq!(t.defensive_shape.back_four_horizontal_max_gap_yards, 15.0);
+        assert_eq!(t.defensive_shape.back_four_horizontal_min_gap_yards, 1.5);
+        assert_eq!(t.defensive_shape.back_four_horizontal_max_gap_yards, 8.0);
         assert_eq!(
             t.defensive_shape.wingback_defensive_pinch_target_seconds,
             3.0
@@ -4388,87 +2458,12 @@ mod tests {
             8.0
         );
         assert_eq!(t.defensive_shape.defensive_goal_side_min_yards, 1.5);
-        assert!(t.carrier_keep_rolling.enabled);
-        assert_eq!(t.carrier_keep_rolling.stop_target_yards, 2.75);
-        assert_eq!(t.carrier_keep_rolling.min_opponent_distance_yards, 3.0);
-        assert_eq!(t.carrier_keep_rolling.min_space_yards, 5.0);
-        assert_eq!(t.carrier_keep_rolling.carry_target_yards, 4.2);
-        assert_eq!(t.carrier_keep_rolling.carry_min_step_yards, 2.25);
-        assert_eq!(t.carrier_keep_rolling.momentum_yps, 0.6);
-        assert!(t.fresh_possession_escape.enabled);
-        assert_eq!(t.fresh_possession_escape.fresh_seconds, 0.8);
-        assert_eq!(t.fresh_possession_escape.min_pressure, 0.55);
-        assert_eq!(t.fresh_possession_escape.crowded_radius_yards, 6.0);
-        assert_eq!(t.fresh_possession_escape.crowded_min_opponents, 2);
-        assert_eq!(t.fresh_possession_escape.min_forward_space_yards, 4.0);
-        assert_eq!(t.fresh_possession_escape.target_yards, 4.8);
-        assert_eq!(t.fresh_possession_escape.corridor_half_width_yards, 3.0);
-        assert_eq!(t.fresh_possession_escape.min_cushion_gain_yards, 0.85);
-        assert_eq!(t.fresh_possession_escape.min_landing_clearance_yards, 2.2);
-        assert_eq!(t.fresh_possession_escape.initial_push_yps, 1.45);
-        assert_eq!(
-            t.fresh_possession_escape.decision_floor_max_probability,
-            0.56
-        );
         assert_eq!(t.lane_affinity.forward_lane_radius, 3);
         assert_eq!(t.lane_affinity.defender_commitment_possession, 0.80);
         assert_eq!(t.lane_affinity.possession_factor, 0.80);
         assert_eq!(t.lane_affinity.row_match_span_rows, 8.0);
-        assert_eq!(t.lane_affinity.home_lane_match_span_lanes, 3.0);
-        assert_eq!(t.lane_affinity.forward_home_lane_weight, 0.16);
-        assert_eq!(t.lane_affinity.role_home_lane_weight, 0.20);
         assert_eq!(t.lane_affinity.open_space_dynamic_lane_bonus_weight, 1.05);
         assert_eq!(t.lane_affinity.movement_shape_dynamic_lane_weight, 0.36);
-        assert_eq!(t.policy_selection.top1_weight, 0.70);
-        assert_eq!(t.policy_selection.top2_weight, 0.20);
-        assert_eq!(t.policy_selection.top3_weight, 0.10);
-        assert_eq!(t.policy_selection.rank_weights(), [0.70, 0.20, 0.10]);
-        assert_eq!(t.policy_selection.boltzmann_temperature, 0.0);
-        assert_eq!(t.pomdp_perception.player_reaction_min_seconds, 0.10);
-        assert_eq!(t.pomdp_perception.player_reaction_max_seconds, 0.25);
-        assert_eq!(t.pomdp_perception.ball_holder_core_degrees, 100.0);
-        assert_eq!(t.pomdp_perception.ball_holder_shoulder_degrees, 40.0);
-        assert_eq!(t.pomdp_perception.ball_holder_core_confidence, 0.90);
-        assert_eq!(t.pomdp_perception.ball_holder_shoulder_confidence, 0.70);
-        assert_eq!(t.pomdp_perception.ball_holder_side_scan_confidence, 0.52);
-        assert_eq!(t.pomdp_perception.ball_holder_rear_scan_confidence, 0.38);
-        assert_eq!(t.pomdp_perception.ball_holder_head_scan_min_seconds, 0.75);
-        assert_eq!(t.pomdp_perception.ball_holder_head_scan_max_seconds, 1.85);
-        assert_eq!(
-            t.pomdp_perception
-                .ball_holder_head_scan_vision_relief_seconds,
-            0.35
-        );
-        assert_eq!(
-            t.pomdp_perception.ball_holder_scan_confidence_vision_bonus,
-            0.08
-        );
-        assert_eq!(t.pomdp_perception.ball_holder_scan_confidence_cap, 0.62);
-        assert_eq!(
-            t.pomdp_perception.ball_holder_head_scan_drift_risk_base,
-            0.24
-        );
-        assert_eq!(
-            t.pomdp_perception.ball_holder_head_scan_drift_risk_span,
-            0.42
-        );
-        assert_eq!(t.pomdp_perception.kalman_point_match_radius_yards, 0.35);
-        assert_eq!(t.pomdp_perception.kalman_min_history_samples, 2);
-        assert_eq!(t.pomdp_perception.kalman_current_sample_epsilon_yards, 0.15);
-        assert_eq!(t.pomdp_perception.kalman_base_sigma_yards, 0.85);
-        assert_eq!(t.pomdp_perception.kalman_speed_sigma_per_yps, 0.10);
-        assert_eq!(
-            t.pomdp_perception.kalman_velocity_disagreement_sigma_yards,
-            0.14
-        );
-        assert_eq!(t.pomdp_perception.kalman_visible_max_confidence, 0.96);
-        assert_eq!(t.pomdp_perception.kalman_front_max_confidence, 0.88);
-        assert_eq!(t.pomdp_perception.kalman_occluded_max_confidence, 0.68);
-        assert_eq!(
-            t.pomdp_perception
-                .kalman_ball_holder_occluded_max_confidence,
-            0.58
-        );
     }
 
     #[test]
@@ -4477,28 +2472,9 @@ mod tests {
             "tracking": { "moved_dt_multiplier": 1.5 },
             "decision_mpc": { "reselect_min_ball_execution_probability": 0.42 },
             "defensive_shape": { "defensive_line_max_into_opp_half_yards": 4.0 },
-            "carrier_keep_rolling": {
-                "enabled": false,
-                "stop_target_yards": 1.4
-            },
-            "fresh_possession_escape": {
-                "min_pressure": 0.48,
-                "initial_push_yps": 1.8,
-                "min_forward_space_yards": 3.5,
-                "corridor_half_width_yards": 2.6
-            },
             "lane_affinity": {
-                "goalkeeper_home_lane_weight": 0.42,
                 "possession_factor": 0.74,
-                "role_home_lane_weight": 0.44,
                 "open_space_dynamic_lane_bonus_weight": 1.3
-            },
-            "pomdp_perception": {
-                "player_reaction_max_seconds": 0.30,
-                "ball_holder_head_scan_max_seconds": 2.0,
-                "ball_holder_side_scan_confidence": 0.55,
-                "ball_holder_head_scan_drift_risk_span": 0.50,
-                "kalman_min_history_samples": 3
             }
         })]);
         assert_eq!(t.tracking.moved_dt_multiplier, 1.5);
@@ -4507,35 +2483,12 @@ mod tests {
             t.defensive_shape.defensive_line_max_into_opp_half_yards,
             4.0
         );
-        assert!(!t.carrier_keep_rolling.enabled);
-        assert_eq!(t.carrier_keep_rolling.stop_target_yards, 1.4);
-        assert_eq!(t.fresh_possession_escape.min_pressure, 0.48);
-        assert_eq!(t.fresh_possession_escape.initial_push_yps, 1.8);
-        assert_eq!(t.fresh_possession_escape.min_forward_space_yards, 3.5);
-        assert_eq!(t.fresh_possession_escape.corridor_half_width_yards, 2.6);
-        assert_eq!(t.lane_affinity.goalkeeper_home_lane_weight, 0.42);
         assert_eq!(t.lane_affinity.possession_factor, 0.74);
-        assert_eq!(t.lane_affinity.role_home_lane_weight, 0.44);
         assert_eq!(t.lane_affinity.open_space_dynamic_lane_bonus_weight, 1.3);
-        assert_eq!(t.pomdp_perception.player_reaction_max_seconds, 0.30);
-        assert_eq!(t.pomdp_perception.ball_holder_head_scan_max_seconds, 2.0);
-        assert_eq!(t.pomdp_perception.ball_holder_side_scan_confidence, 0.55);
-        assert_eq!(
-            t.pomdp_perception.ball_holder_head_scan_drift_risk_span,
-            0.50
-        );
-        assert_eq!(t.pomdp_perception.kalman_min_history_samples, 3);
         // Untouched fields keep their defaults.
         assert_eq!(t.tracking.tackle_recover_max_distance_yards, 3.8);
         assert_eq!(t.shooting.shot_block_bailout_max_probability, 0.86);
-        assert_eq!(t.carrier_keep_rolling.carry_target_yards, 4.2);
-        assert_eq!(t.fresh_possession_escape.target_yards, 4.8);
-        assert_eq!(t.lane_affinity.home_lane_match_span_lanes, 3.0);
-        assert_eq!(t.lane_affinity.forward_home_lane_weight, 0.16);
         assert_eq!(t.lane_affinity.movement_shape_dynamic_lane_weight, 0.36);
-        assert_eq!(t.pomdp_perception.player_reaction_min_seconds, 0.10);
-        assert_eq!(t.pomdp_perception.ball_holder_rear_scan_confidence, 0.38);
-        assert_eq!(t.pomdp_perception.kalman_base_sigma_yards, 0.85);
     }
 
     #[test]
@@ -4566,110 +2519,27 @@ mod tests {
     #[test]
     fn overlays_are_sanitized_to_hard_bounds() {
         let t = Tunables::from_overlays([json!({
-            "reward": { "goal_scored_points": 42.0 },
             "decision_mpc": { "reselect_min_execution_confidence": -1.0 },
             "shooting": { "shot_block_bailout_max_probability": 4.0 },
             "defensive_shape": {
                 "back_four_horizontal_min_gap_yards": 12.0,
                 "back_four_horizontal_max_gap_yards": 4.0
             },
-            "carrier_keep_rolling": {
-                "stop_target_yards": 99.0,
-                "carry_target_yards": 2.0,
-                "carry_min_step_yards": 4.0,
-                "min_space_yards": 1.0
-            },
-            "fresh_possession_escape": {
-                "fresh_seconds": 99.0,
-                "min_forward_space_yards": 99.0,
-                "target_yards": 0.5,
-                "corridor_half_width_yards": 99.0,
-                "min_cushion_gain_yards": 2.0,
-                "initial_push_yps": 99.0,
-                "crowded_min_opponents": 99
-            },
             "lane_affinity": {
-                "goalkeeper_home_lane_weight": 9.0,
                 "possession_factor": 4.0,
                 "forward_lane_radius": 99,
-                "home_lane_match_span_lanes": 99.0,
-                "role_home_lane_weight": -1.0,
                 "lookahead_min_seconds": 2.0,
                 "lookahead_max_seconds": 0.5
-            },
-            "policy_selection": {
-                "top1_weight": -0.5,
-                "boltzmann_temperature": 5000.0
-            },
-            "pomdp_perception": {
-                "player_reaction_min_seconds": 2.0,
-                "player_reaction_max_seconds": -1.0,
-                "ball_holder_core_degrees": -4.0,
-                "ball_holder_side_scan_confidence": 2.0,
-                "ball_holder_head_scan_min_seconds": 99.0,
-                "ball_holder_head_scan_max_seconds": -1.0,
-                "ball_holder_scan_confidence_vision_bonus": 9.0,
-                "ball_holder_scan_confidence_cap": -1.0,
-                "ball_holder_head_scan_drift_risk_base": 5.0,
-                "ball_holder_head_scan_drift_risk_span": -5.0,
-                "kalman_point_match_radius_yards": 99.0,
-                "kalman_min_history_samples": 99,
-                "kalman_current_sample_epsilon_yards": -2.0,
-                "kalman_base_sigma_yards": 0.0,
-                "kalman_visible_max_confidence": 3.0
             }
         })]);
-        assert_eq!(t.reward.goal_scored_points, 500.0);
         assert_eq!(t.decision_mpc.reselect_min_execution_confidence, 0.0);
         assert_eq!(t.shooting.shot_block_bailout_max_probability, 1.0);
         assert_eq!(t.defensive_shape.back_four_horizontal_min_gap_yards, 4.0);
         assert_eq!(t.defensive_shape.back_four_horizontal_max_gap_yards, 12.0);
-        assert_eq!(t.carrier_keep_rolling.stop_target_yards, 6.0);
-        assert_eq!(t.carrier_keep_rolling.carry_target_yards, 2.0);
-        assert_eq!(t.carrier_keep_rolling.carry_min_step_yards, 2.0);
-        assert_eq!(t.carrier_keep_rolling.min_space_yards, 2.0);
-        assert_eq!(t.fresh_possession_escape.fresh_seconds, 5.0);
-        assert_eq!(t.fresh_possession_escape.min_forward_space_yards, 20.0);
-        assert_eq!(t.fresh_possession_escape.target_yards, 2.0);
-        assert_eq!(t.fresh_possession_escape.corridor_half_width_yards, 8.0);
-        assert_eq!(t.fresh_possession_escape.min_cushion_gain_yards, 2.0);
-        assert_eq!(t.fresh_possession_escape.initial_push_yps, 8.0);
-        assert_eq!(t.fresh_possession_escape.crowded_min_opponents, 8);
-        assert_eq!(t.lane_affinity.goalkeeper_home_lane_weight, 1.0);
         assert_eq!(t.lane_affinity.possession_factor, 1.0);
         assert_eq!(t.lane_affinity.forward_lane_radius, 6);
-        assert_eq!(t.lane_affinity.home_lane_match_span_lanes, 12.0);
-        assert_eq!(t.lane_affinity.role_home_lane_weight, 0.0);
         assert_eq!(t.lane_affinity.lookahead_min_seconds, 0.5);
         assert_eq!(t.lane_affinity.lookahead_max_seconds, 2.0);
-        // Negative rank weight clamps up to the 0.0 hard floor; an absurd
-        // temperature clamps down to the 1000.0 hard ceiling.
-        assert_eq!(t.policy_selection.top1_weight, 0.0);
-        assert_eq!(t.policy_selection.boltzmann_temperature, 1_000.0);
-        assert_eq!(t.pomdp_perception.player_reaction_min_seconds, 1.0);
-        assert_eq!(t.pomdp_perception.player_reaction_max_seconds, 1.0);
-        assert_eq!(t.pomdp_perception.ball_holder_core_degrees, 1.0);
-        assert_eq!(t.pomdp_perception.ball_holder_side_scan_confidence, 1.0);
-        assert_eq!(t.pomdp_perception.ball_holder_head_scan_min_seconds, 3.0);
-        assert_eq!(t.pomdp_perception.ball_holder_head_scan_max_seconds, 3.0);
-        assert_eq!(
-            t.pomdp_perception.ball_holder_scan_confidence_vision_bonus,
-            0.25
-        );
-        assert_eq!(t.pomdp_perception.ball_holder_scan_confidence_cap, 0.0);
-        assert_eq!(
-            t.pomdp_perception.ball_holder_head_scan_drift_risk_base,
-            1.0
-        );
-        assert_eq!(
-            t.pomdp_perception.ball_holder_head_scan_drift_risk_span,
-            0.0
-        );
-        assert_eq!(t.pomdp_perception.kalman_point_match_radius_yards, 5.0);
-        assert_eq!(t.pomdp_perception.kalman_min_history_samples, 10);
-        assert_eq!(t.pomdp_perception.kalman_current_sample_epsilon_yards, 0.0);
-        assert_eq!(t.pomdp_perception.kalman_base_sigma_yards, 0.01);
-        assert_eq!(t.pomdp_perception.kalman_visible_max_confidence, 1.0);
     }
 
     #[test]
@@ -4678,41 +2548,13 @@ mod tests {
         t.shooting.shot_on_frame_min_probability = 1.2;
         t.defensive_shape.back_four_horizontal_min_gap_yards = 9.0;
         t.defensive_shape.back_four_horizontal_max_gap_yards = 6.0;
-        t.carrier_keep_rolling.carry_min_step_yards = 6.0;
-        t.carrier_keep_rolling.carry_target_yards = 4.0;
-        t.fresh_possession_escape.target_yards = 0.6;
-        t.fresh_possession_escape.min_cushion_gain_yards = 1.2;
         t.lane_affinity.possession_factor = 1.2;
-        t.lane_affinity.goalkeeper_home_lane_weight = -0.1;
         t.lane_affinity.forward_lane_radius = 9;
-        t.lane_affinity.home_lane_match_span_lanes = 0.5;
-        t.lane_affinity.forward_home_lane_weight = 6.0;
-        t.pomdp_perception.player_reaction_min_seconds = 0.8;
-        t.pomdp_perception.player_reaction_max_seconds = 0.2;
-        t.pomdp_perception.ball_holder_head_scan_min_seconds = 2.5;
-        t.pomdp_perception.ball_holder_head_scan_max_seconds = 1.5;
-        t.pomdp_perception.ball_holder_side_scan_confidence = 1.2;
-        t.pomdp_perception.ball_holder_head_scan_drift_risk_base = -0.1;
-        t.pomdp_perception.kalman_min_history_samples = 0;
 
         let err = t.validate_strict().expect_err("config should be invalid");
         assert!(err.contains("shooting.shot_on_frame_min_probability"));
         assert!(err.contains("defensive_shape.back_four_horizontal_min_gap_yards >"));
-        assert!(err.contains("carrier_keep_rolling.carry_min_step_yards >"));
-        assert!(err.contains("fresh_possession_escape.target_yards <"));
         assert!(err.contains("lane_affinity.possession_factor"));
-        assert!(err.contains("lane_affinity.goalkeeper_home_lane_weight"));
         assert!(err.contains("lane_affinity.forward_lane_radius"));
-        assert!(err.contains("lane_affinity.home_lane_match_span_lanes"));
-        assert!(err.contains("lane_affinity.forward_home_lane_weight"));
-        assert!(err.contains(
-            "pomdp_perception.player_reaction_max_seconds < pomdp_perception.player_reaction_min_seconds"
-        ));
-        assert!(err.contains("pomdp_perception.ball_holder_side_scan_confidence"));
-        assert!(err.contains("pomdp_perception.ball_holder_head_scan_drift_risk_base"));
-        assert!(err.contains("pomdp_perception.kalman_min_history_samples"));
-        assert!(err.contains(
-            "pomdp_perception.ball_holder_head_scan_max_seconds < pomdp_perception.ball_holder_head_scan_min_seconds"
-        ));
     }
 }

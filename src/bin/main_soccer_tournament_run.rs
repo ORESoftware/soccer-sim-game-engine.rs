@@ -35,11 +35,13 @@ use std::time::{Duration, Instant};
 use soccer_engine::des::general::soccer::{
     MatchConfig, SoccerNeuralNetworkSnapshot, SoccerQPolicyOptions, SoccerTeamQPolicies,
 };
-use soccer_engine::des::general::soccer_elo::{CrossPlayMatrix, EloRatings, ELO_DEFAULT_K};
 use soccer_engine::des::general::tournament::{
     EngineMatchRunner, EngineMatchRunnerConfig, GenomeRng, SoccerTeamGenome, TeamBrain, Tournament,
     TournamentFormat, TournamentLearningMode, TournamentReport, TournamentTeam,
     TOURNAMENT_DEFAULT_MATCH_SECONDS,
+};
+use soccer_engine::des::general::soccer_elo::{
+    CrossPlayMatrix, EloRatings, ELO_DEFAULT_K,
 };
 use soccer_engine::des::soccer_learning::SOCCER_POLICY_STATUS_ACTIVE;
 use soccer_engine::des::soccer_learning_pg::{SoccerLearningPgStore, TournamentElite};
@@ -551,7 +553,7 @@ fn promote_salvaged_brain(
     Ok(policy_version_id)
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let started = Instant::now();
 
     // Tournament shape: defaults to the 128-team format (32 groups of 4, top-2 →
@@ -1009,18 +1011,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn main() {
-    let service_name = "main_soccer_tournament_run";
-    let _telemetry = soccer_engine::telemetry::init_soccer_telemetry(service_name);
-    soccer_engine::telemetry::emit_process_start(service_name);
-    if let Err(error) = run() {
-        soccer_engine::telemetry::emit_process_error(service_name, &error.to_string());
-        eprintln!("main_soccer_tournament_run: {error}");
-        std::process::exit(1);
-    }
-    soccer_engine::telemetry::emit_process_complete(service_name);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1160,8 +1150,7 @@ mod tests {
             layers: vec![layer],
             training_steps: 0,
             average_loss: None,
-            target_popart: None,
-            ..SoccerNeuralNetworkSnapshot::default()
+            policy_head: None,
         };
         refresh_snapshot_norm(&mut snapshot);
         snapshot

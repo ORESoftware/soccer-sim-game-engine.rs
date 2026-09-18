@@ -74,33 +74,6 @@ const REF_SHOT_ANGLE_DEGREES: f64 = 42.0;
 /// Reference speed/accel for ball kinematics normalization.
 const REF_BALL_SPEED_YPS: f64 = 24.0;
 const REF_BALL_ACCEL_YPS2: f64 = 12.0;
-/// Max skill rating (0-10), used to normalize per-foot power / shooting skill to `[0,1]`.
-const MAX_SKILL_RATING: f64 = 10.0;
-
-// --- Analytic shot-value distance curve (`analytic_shot_trigger_value`) ---
-/// Inside this distance a shot keeps full distance value (1.0).
-const SHOT_VALUE_FULL_DISTANCE_YARDS: f64 = 18.0;
-/// End of the "20 or 15, not 25" taper band; distance value is `SHOT_VALUE_TAPER_FLOOR` here.
-/// (Bare distance value then eases to 0 over the next 8yd, i.e. by ~30yd.)
-const SHOT_VALUE_TAPER_DISTANCE_YARDS: f64 = 22.0;
-/// Distance value at [`SHOT_VALUE_TAPER_DISTANCE_YARDS`] (before any long-range merit lift).
-const SHOT_VALUE_TAPER_FLOOR: f64 = 0.45;
-
-// --- Shot-score multiplier (`shot_trigger_score_multiplier`) ---
-/// Soft multiplier on `shot_score` at value 0 (a far/covered chance is demoted toward this).
-const SHOT_TRIGGER_MULT_FLOOR: f64 = 0.10;
-/// Slope of the value→multiplier map.
-const SHOT_TRIGGER_MULT_SLOPE: f64 = 1.20;
-/// Ceiling of the value→multiplier map (a close/open chance is lifted toward this).
-const SHOT_TRIGGER_MULT_CEILING: f64 = 1.30;
-
-// --- RL sample collection (`collect_shot_trigger_rl_samples`) ---
-/// Only sample shot decisions inside this goal distance (else the corpus is midfield carriers).
-const SHOT_TRIGGER_SAMPLE_MAX_GOAL_DISTANCE_YARDS: f64 = 32.0;
-/// The sampled candidate must be this close to the ball to be the one deciding to shoot.
-const SHOT_TRIGGER_SAMPLE_BALL_PROXIMITY_YARDS: f64 = 4.0;
-/// Analytic value at/above which the sampled action is recorded as "a shot was taken".
-const SHOT_TRIGGER_SAMPLE_SHOOT_ACTION_THRESHOLD: f64 = 0.5;
 
 /// Kill-switch: set to a truthy value to DISABLE the learnable shot trigger and keep
 /// the engine byte-identical to before this module existed. Default (unset) = ON.
@@ -134,21 +107,15 @@ pub fn shot_foot_mpc_enabled() -> bool {
 /// into it. `1.0` = empty net, `0.0` = fully covered. Distance-agnostic.
 pub fn open_goal_fraction(observation: &SoccerPomdpObservation) -> f64 {
     // Angular width the shooter sees (a wide central chance ⇒ near 1).
-    let angle_width =
-        (observation.opponent_goal_angle_degrees / REF_SHOT_ANGLE_DEGREES).clamp(0.0, 1.0);
+    let angle_width = (observation.opponent_goal_angle_degrees / REF_SHOT_ANGLE_DEGREES).clamp(0.0, 1.0);
     // Keeper coverage: a keeper sitting ON the shot angle (small angle to him) and
     // ON his line covers the most; one out of position / off the angle covers least.
-    let keeper_angle_off = (observation.opposing_goalkeeper_angle_degrees.abs()
-        / REF_SHOT_ANGLE_DEGREES)
+    let keeper_angle_off = (observation.opposing_goalkeeper_angle_degrees.abs() / REF_SHOT_ANGLE_DEGREES)
         .clamp(0.0, 1.0);
-    let out_of_position = observation
-        .opposing_goalkeeper_out_of_position
-        .clamp(0.0, 1.0);
+    let out_of_position = observation.opposing_goalkeeper_out_of_position.clamp(0.0, 1.0);
     // Net left open by the keeper = how far he is off the shot line, lifted when he's
     // caught out of position. Covered (on the angle, in position) ⇒ near 0.
-    let keeper_open = (0.30 + 0.70 * keeper_angle_off)
-        .clamp(0.0, 1.0)
-        .max(out_of_position);
+    let keeper_open = (0.30 + 0.70 * keeper_angle_off).clamp(0.0, 1.0).max(out_of_position);
     (angle_width * keeper_open).clamp(0.0, 1.0)
 }
 
@@ -161,7 +128,7 @@ pub fn shot_rebound_second_chance_score(observation: &SoccerPomdpObservation) ->
     let power = observation
         .skill_right_foot_shot_power
         .max(observation.skill_left_foot_shot_power);
-    let power01 = (power / MAX_SKILL_RATING).clamp(0.0, 1.0);
+    let power01 = (power / 10.0).clamp(0.0, 1.0);
     // A keeper who gets a hand to it (low beat-probability) but is reachable parries
     // a powerful strike; a wide-open net is just a goal, not a rebound.
     let stop_likelihood = (1.0 - observation.shot_beat_goalkeeper_probability.clamp(0.0, 1.0))
@@ -279,7 +246,7 @@ impl ShotTriggerInputs {
             p(self.goal_attack_window),
             p(self.body_mechanics_fit),
             p(self.shooting_skill),
-            (self.strong_foot_power / MAX_SKILL_RATING).clamp(0.0, 1.0),
+            (self.strong_foot_power / 10.0).clamp(0.0, 1.0),
             b(self.is_forward),
         ]
     }
@@ -299,15 +266,12 @@ pub fn analytic_shot_trigger_value(inputs: &ShotTriggerInputs) -> f64 {
     // Distance base: full value inside ~18yd, ramping down through the 18→22yd band (the
     // "20 or 15, not 25" zone) and toward zero by 30yd. Tuned so a clean 15-20yd chance
     // stays high while a 25yd+ shot is low — the discipline anchor.
-    // Full (1.0) inside FULL; eases to SHOT_VALUE_TAPER_FLOOR over the 4yd FULL→TAPER band
-    // (slope 0.55 = 1.0 − floor); then to 0 over the 8yd TAPER→ZERO band (slope = the floor).
-    // Slope/span literals are kept verbatim so the curve is bit-for-bit the original.
-    let distance_base = if d <= SHOT_VALUE_FULL_DISTANCE_YARDS {
+    let distance_base = if d <= 18.0 {
         1.0
-    } else if d <= SHOT_VALUE_TAPER_DISTANCE_YARDS {
-        1.0 - (d - SHOT_VALUE_FULL_DISTANCE_YARDS) / 4.0 * 0.55
+    } else if d <= 22.0 {
+        1.0 - (d - 18.0) / 4.0 * 0.55 // 1.0 @18 → 0.45 @22
     } else {
-        (SHOT_VALUE_TAPER_FLOOR - (d - SHOT_VALUE_TAPER_DISTANCE_YARDS) / 8.0 * 0.45).max(0.0)
+        (0.45 - (d - 22.0) / 8.0 * 0.45).max(0.0) // 0.45 @22 → 0 @30
     };
 
     // A genuine long-range chance lifts the far tail back up: an open net / stranded
@@ -335,9 +299,10 @@ pub fn analytic_shot_trigger_value(inputs: &ShotTriggerInputs) -> f64 {
         .max(inputs.keeper_out_of_position)
         .max(inputs.rebound_second_chance)
         .clamp(0.0, 1.0);
-    let quality =
-        (0.55 + 0.30 * inputs.on_frame_probability.clamp(0.0, 1.0) + 0.20 * keeper_exposure
-            - 0.35 * inputs.block_probability.clamp(0.0, 1.0))
+    let quality = (0.55
+        + 0.30 * inputs.on_frame_probability.clamp(0.0, 1.0)
+        + 0.20 * keeper_exposure
+        - 0.35 * inputs.block_probability.clamp(0.0, 1.0))
         .clamp(0.25, 1.0);
     let mechanics = (0.55 + 0.45 * inputs.body_mechanics_fit.clamp(0.0, 1.0)).clamp(0.0, 1.0);
 
@@ -353,8 +318,7 @@ pub fn analytic_shot_trigger_value(inputs: &ShotTriggerInputs) -> f64 {
 /// term only needs to nudge, not gate.
 pub fn shot_trigger_score_multiplier(value: f64) -> f64 {
     let v = value.clamp(0.0, 1.0);
-    (SHOT_TRIGGER_MULT_FLOOR + SHOT_TRIGGER_MULT_SLOPE * v)
-        .clamp(SHOT_TRIGGER_MULT_FLOOR, SHOT_TRIGGER_MULT_CEILING)
+    (0.10 + 1.20 * v).clamp(0.10, 1.30)
 }
 
 /// One reward-weighted RL row for the shot-trigger head: the state at a shot decision,
@@ -434,20 +398,16 @@ impl ShotTriggerHead {
                 continue;
             }
             let target = [target.clamp(0.0, 1.0)];
-            let result =
-                self.network
-                    .train_sample_clipped(&features[..], &target, learning_rate, 4.0);
+            let result = self
+                .network
+                .train_sample_clipped(&features[..], &target, learning_rate, 4.0);
             if result.applied && result.loss.is_finite() {
                 total += result.loss;
                 applied += 1;
                 self.training_steps += 1;
             }
         }
-        let mean = if applied > 0 {
-            total / applied as f64
-        } else {
-            0.0
-        };
+        let mean = if applied > 0 { total / applied as f64 } else { 0.0 };
         self.last_loss = Some(mean);
         mean
     }
@@ -456,11 +416,7 @@ impl ShotTriggerHead {
     /// each sample's ACTION (shoot/held), weighted by how much its reward beat the batch
     /// baseline — good shot decisions are reinforced, bad ones barely. Mirrors
     /// [`super::back_four_line::BackFourLineHead::train_reward_weighted`].
-    pub fn train_reward_weighted(
-        &mut self,
-        samples: &[ShotTriggerSample],
-        learning_rate: f64,
-    ) -> f64 {
+    pub fn train_reward_weighted(&mut self, samples: &[ShotTriggerSample], learning_rate: f64) -> f64 {
         let finite: Vec<&ShotTriggerSample> = samples
             .iter()
             .filter(|s| s.reward.is_finite() && s.action_shoot.is_finite())
@@ -470,11 +426,7 @@ impl ShotTriggerHead {
         }
         let n = finite.len() as f64;
         let baseline = finite.iter().map(|s| s.reward).sum::<f64>() / n;
-        let std = (finite
-            .iter()
-            .map(|s| (s.reward - baseline).powi(2))
-            .sum::<f64>()
-            / n)
+        let std = (finite.iter().map(|s| (s.reward - baseline).powi(2)).sum::<f64>() / n)
             .sqrt()
             .max(1e-3);
         let mut total = 0.0;
@@ -487,23 +439,16 @@ impl ShotTriggerHead {
             let advantage = (s.reward - baseline) / std;
             let weight = advantage.clamp(-4.0, 2.0).exp().min(7.5);
             let target = [s.action_shoot.clamp(0.0, 1.0)];
-            let result = self.network.train_sample_clipped(
-                &features[..],
-                &target,
-                learning_rate * weight,
-                4.0,
-            );
+            let result =
+                self.network
+                    .train_sample_clipped(&features[..], &target, learning_rate * weight, 4.0);
             if result.applied && result.loss.is_finite() {
                 total += result.loss;
                 applied += 1;
                 self.training_steps += 1;
             }
         }
-        let mean = if applied > 0 {
-            total / applied as f64
-        } else {
-            0.0
-        };
+        let mean = if applied > 0 { total / applied as f64 } else { 0.0 };
         self.last_loss = Some(mean);
         mean
     }
@@ -614,8 +559,7 @@ impl SoccerMatch {
         while i < self.pending_shot_trigger.len() {
             if self.pending_shot_trigger[i].due_tick <= tick {
                 let decision = self.pending_shot_trigger.swap_remove(i);
-                let now_value =
-                    shot_decision_pitch_value(snapshot, decision.team, decision.player_id);
+                let now_value = shot_decision_pitch_value(snapshot, decision.team, decision.player_id);
                 if now_value.is_finite() && decision.decision_pitch_value.is_finite() {
                     self.shot_trigger_samples.push(ShotTriggerSample {
                         inputs: decision.inputs,
@@ -662,21 +606,15 @@ impl SoccerMatch {
         // dominated by midfield carriers who would never shoot. Require the candidate to be
         // close enough to the ball to actually be the one deciding to shoot.
         if me.role == PlayerRole::Goalkeeper
-            || observation.yards_to_goal > SHOT_TRIGGER_SAMPLE_MAX_GOAL_DISTANCE_YARDS
-            || me.position.distance(snapshot.ball.position)
-                > SHOT_TRIGGER_SAMPLE_BALL_PROXIMITY_YARDS
+            || observation.yards_to_goal > 32.0
+            || me.position.distance(snapshot.ball.position) > 4.0
         {
             return;
         }
         let shooting = ability01(me.skills.shooting);
         let inputs = ShotTriggerInputs::from_observation(&observation, me.role, shooting, 1.0);
         // Action proxy: a high analytic value means a shot is the live intent this tick.
-        let action_shoot =
-            if analytic_shot_trigger_value(&inputs) >= SHOT_TRIGGER_SAMPLE_SHOOT_ACTION_THRESHOLD {
-                1.0
-            } else {
-                0.0
-            };
+        let action_shoot = if analytic_shot_trigger_value(&inputs) >= 0.5 { 1.0 } else { 0.0 };
         let pitch_value = shot_decision_pitch_value(snapshot, me.team, holder);
         if pitch_value.is_finite() {
             self.pending_shot_trigger.push(PendingShotTriggerDecision {
@@ -803,14 +741,8 @@ mod shot_trigger_tests {
         open.keeper_out_of_position = 0.9;
         open.beat_goalkeeper_probability = 0.85;
         let open_v = analytic_shot_trigger_value(&open);
-        assert!(
-            covered_v < 0.35,
-            "covered 24yd shot should be low, got {covered_v}"
-        );
-        assert!(
-            open_v > covered_v,
-            "an open net at range should rescue the long shot"
-        );
+        assert!(covered_v < 0.35, "covered 24yd shot should be low, got {covered_v}");
+        assert!(open_v > covered_v, "an open net at range should rescue the long shot");
     }
 
     #[test]
@@ -893,10 +825,7 @@ mod shot_trigger_tests {
         let covered = open_goal_fraction(&obs);
         obs.opposing_goalkeeper_out_of_position = 0.95;
         let open = open_goal_fraction(&obs);
-        assert!(
-            open > covered,
-            "a stranded keeper should leave more net open"
-        );
+        assert!(open > covered, "a stranded keeper should leave more net open");
     }
 
     fn sample_shot_observation() -> SoccerPomdpObservation {
