@@ -15,3 +15,6 @@ viz/tune_log.csv
 temp
 tmp/worktrees
 temp/worktrees
+
+# --- carried over from the grafted branch rescue/orphan-d08bdf01b7f0-soccer-sim-game-engine-own-the-extracted ---
+/target
